@@ -29,7 +29,7 @@ class TicketManageView(discord.ui.View):
                 break
         
         # Check if ticket creator
-        creator_name = interaction.channel.name.replace("ticket-", "").replace("claimed-", "")
+        creator_name = interaction.channel.name.split("-")[-1] if "-" in interaction.channel.name else ""
         if interaction.user.name.lower() == creator_name:
             has_permission = True
         
@@ -55,7 +55,7 @@ class TicketManageView(discord.ui.View):
         transcript.seek(0)
         
         # Send transcript to creator
-        creator_name = interaction.channel.name.replace("ticket-", "").replace("claimed-", "")
+        creator_name = interaction.channel.name.split("-")[-1] if "-" in interaction.channel.name else ""
         for member in interaction.guild.members:
             if member.name.lower() == creator_name:
                 try:
@@ -89,13 +89,40 @@ class TicketManageView(discord.ui.View):
             )
             return
         
-        # Already claimed?
+        # Check if already claimed
         if interaction.channel.name.startswith("claimed-"):
-            await interaction.response.send_message("❌ This ticket is already claimed!", ephemeral=True)
+            # Get the current claimer
+            parts = interaction.channel.name.split("-")
+            if len(parts) >= 2:
+                current_claimer = parts[1]
+                await interaction.response.send_message(
+                    f"❌ This ticket is already claimed by **{current_claimer}**!", 
+                    ephemeral=True
+                )
+            else:
+                await interaction.response.send_message("❌ This ticket is already claimed!", ephemeral=True)
             return
         
-        # Rename channel
-        new_name = interaction.channel.name.replace("ticket-", "claimed-")
+        # Get ticket creator name
+        parts = interaction.channel.name.split("-", 1)
+        creator_name = parts[1] if len(parts) > 1 else "unknown"
+        
+        # Get category from topic
+        category = "Support"
+        if interaction.channel.topic:
+            if "|" in interaction.channel.topic:
+                category = interaction.channel.topic.split("|")[-1].strip()
+        
+        # Create new channel name: claimed-STAFFNAME-category-creatorname
+        staff_name = interaction.user.name.lower()
+        # Clean category name for channel
+        clean_category = category.lower().replace(" ", "-").replace("&", "and")
+        new_name = f"claimed-{staff_name}-{clean_category}-{creator_name}"
+        
+        # Trim to 100 chars (Discord limit)
+        if len(new_name) > 100:
+            new_name = new_name[:100]
+        
         await interaction.channel.edit(name=new_name)
         
         embed = discord.Embed(
@@ -103,6 +130,66 @@ class TicketManageView(discord.ui.View):
             description=f"This ticket has been claimed by {interaction.user.mention}",
             color=discord.Color.green()
         )
+        embed.add_field(name="Claimed By", value=interaction.user.mention)
+        embed.set_footer(text=f"Only {interaction.user.name} can unclaim this ticket")
+        await interaction.response.send_message(embed=embed)
+    
+    @discord.ui.button(label="🔓 Unclaim Ticket", style=discord.ButtonStyle.gray, custom_id="unclaim_ticket_btn")
+    async def unclaim_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
+        # Check if ticket is claimed
+        if not interaction.channel.name.startswith("claimed-"):
+            await interaction.response.send_message("❌ This ticket hasn't been claimed yet!", ephemeral=True)
+            return
+        
+        # Get claimer from channel name
+        # Format: claimed-STAFFNAME-category-creatorname
+        parts = interaction.channel.name.split("-", 1)
+        if len(parts) < 2:
+            await interaction.response.send_message("❌ Cannot determine claimer!", ephemeral=True)
+            return
+        
+        # Get the staff name (everything between claimed- and the next parts)
+        name_parts = parts[1].split("-")
+        
+        # The last part is creator, second-to-last is category, everything else is staff name
+        if len(name_parts) >= 3:
+            creator_name = name_parts[-1]
+            category_name = name_parts[-2]
+            claimer_name = "-".join(name_parts[:-2])
+        elif len(name_parts) == 2:
+            creator_name = name_parts[-1]
+            category_name = ""
+            claimer_name = name_parts[0]
+        else:
+            creator_name = name_parts[0]
+            category_name = ""
+            claimer_name = ""
+        
+        # Only the claimer can unclaim (or staff if needed)
+        is_claimer = interaction.user.name.lower() == claimer_name.lower()
+        is_staff = False
+        staff_role = discord.utils.get(interaction.guild.roles, name=STAFF_ROLE)
+        if staff_role and staff_role in interaction.user.roles:
+            is_staff = True
+        
+        if not is_claimer and not is_staff:
+            await interaction.response.send_message(
+                f"❌ Only **{claimer_name}** can unclaim this ticket!", 
+                ephemeral=True
+            )
+            return
+        
+        # Change name back to ticket-creatorname
+        new_name = f"ticket-{creator_name}"
+        await interaction.channel.edit(name=new_name)
+        
+        embed = discord.Embed(
+            title="🔓 Ticket Unclaimed",
+            description=f"This ticket has been unclaimed by {interaction.user.mention}",
+            color=discord.Color.orange()
+        )
+        embed.add_field(name="Unclaimed By", value=interaction.user.mention)
+        embed.add_field(name="Status", value="Available for claim")
         await interaction.response.send_message(embed=embed)
 
 class TicketSelect(discord.ui.Select):
@@ -124,7 +211,7 @@ class TicketSelect(discord.ui.Select):
         # Check for existing tickets
         existing = None
         for ch in interaction.guild.channels:
-            if ch.name == f"ticket-{interaction.user.name.lower()}" or ch.name == f"claimed-{interaction.user.name.lower()}":
+            if ch.name.endswith(f"-{interaction.user.name.lower()}"):
                 existing = ch
                 break
         
@@ -246,7 +333,7 @@ class TicketSelect(discord.ui.Select):
         embed.add_field(name="Category", value=category_name, inline=True)
         embed.set_footer(text=f"Ticket ID: {channel.id}")
         
-        # Create view with Close and Claim buttons
+        # Create view with Close, Claim, and Unclaim buttons
         view = TicketManageView(self.bot, config["claim_roles"])
         await channel.send(embed=embed, view=view)
         
@@ -310,14 +397,12 @@ class Tickets(commands.Cog):
     @commands.command(name='add')
     async def add_user(self, ctx, member: discord.Member):
         """Add a user to the ticket"""
-        if not ctx.channel.name.startswith("ticket-") and not ctx.channel.name.startswith("claimed-"):
+        if not any(ctx.channel.name.startswith(p) for p in ["ticket-", "claimed-"]):
             await ctx.send("❌ Use this in a ticket channel!")
             return
         
-        # Check if command user has permission
         has_perm = False
         
-        # Check roles
         all_roles = [STAFF_ROLE, BASE_BUYING_ROLE, BEDROCK_ROLE, SPAWNER_ROLE, BUILDING_ROLE]
         for role_name in all_roles:
             role = discord.utils.get(ctx.guild.roles, name=role_name)
@@ -326,7 +411,7 @@ class Tickets(commands.Cog):
                 break
         
         # Check if ticket creator
-        creator_name = ctx.channel.name.replace("ticket-", "").replace("claimed-", "")
+        creator_name = ctx.channel.name.split("-")[-1] if "-" in ctx.channel.name else ""
         if ctx.author.name.lower() == creator_name:
             has_perm = True
         
@@ -340,7 +425,7 @@ class Tickets(commands.Cog):
     @commands.command(name='remove')
     async def remove_user(self, ctx, member: discord.Member):
         """Remove a user from the ticket"""
-        if not ctx.channel.name.startswith("ticket-") and not ctx.channel.name.startswith("claimed-"):
+        if not any(ctx.channel.name.startswith(p) for p in ["ticket-", "claimed-"]):
             await ctx.send("❌ Use this in a ticket channel!")
             return
         
@@ -357,7 +442,7 @@ class Tickets(commands.Cog):
                 has_perm = True
                 break
         
-        creator_name = ctx.channel.name.replace("ticket-", "").replace("claimed-", "")
+        creator_name = ctx.channel.name.split("-")[-1] if "-" in ctx.channel.name else ""
         if ctx.author.name.lower() == creator_name:
             has_perm = True
         
@@ -371,7 +456,7 @@ class Tickets(commands.Cog):
     @commands.command(name='close')
     async def close(self, ctx):
         """Close the ticket"""
-        if not ctx.channel.name.startswith("ticket-") and not ctx.channel.name.startswith("claimed-"):
+        if not any(ctx.channel.name.startswith(p) for p in ["ticket-", "claimed-"]):
             await ctx.send("❌ Use this in a ticket channel!")
             return
         
@@ -384,7 +469,7 @@ class Tickets(commands.Cog):
                 has_perm = True
                 break
         
-        creator_name = ctx.channel.name.replace("ticket-", "").replace("claimed-", "")
+        creator_name = ctx.channel.name.split("-")[-1] if "-" in ctx.channel.name else ""
         if ctx.author.name.lower() == creator_name:
             has_perm = True
         
@@ -407,7 +492,7 @@ class Tickets(commands.Cog):
         transcript.seek(0)
         
         # Send transcript
-        creator_name = ctx.channel.name.replace("ticket-", "").replace("claimed-", "")
+        creator_name = ctx.channel.name.split("-")[-1] if "-" in ctx.channel.name else ""
         for member in ctx.guild.members:
             if member.name.lower() == creator_name:
                 try:
