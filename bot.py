@@ -16,34 +16,19 @@ STAFF_ROLE = "Staff"
 
 @bot.event
 async def on_ready():
-    print(f'Bot is online: {bot.user}')
-    
-    try:
-        await bot.load_extension('cogs.moderation')
-        print("Moderation cog loaded")
-    except Exception as e:
-        print(f"Failed to load moderation: {e}")
-    
+    print(f'✅ Bot is online: {bot.user}')
     try:
         await bot.load_extension('cogs.tickets')
-        print("Tickets cog loaded")
+        print("✅ Tickets cog loaded!")
     except Exception as e:
-        print(f"Failed to load tickets: {e}")
+        print(f"❌ Failed to load tickets: {e}")
 
 @bot.command(name='help')
 async def help_cmd(ctx):
-    embed = discord.Embed(title="Bot Commands", color=discord.Color.blue())
+    embed = discord.Embed(title="Ticket Bot Commands", color=discord.Color.blue())
     embed.add_field(name="General", value="`!help` `!ping`", inline=False)
-    
-    staff_role = discord.utils.get(ctx.guild.roles, name=STAFF_ROLE)
-    if staff_role and staff_role in ctx.author.roles:
-        embed.add_field(name="Moderation", 
-            value="`!kick` `!ban` `!unban` `!mute` `!unmute` `!clear` `!warn` `!warnings`", 
-            inline=False)
-        embed.add_field(name="Tickets", 
-            value="`!ticketpanel` `!close` `!add` `!remove`", 
-            inline=False)
-    
+    embed.add_field(name="Ticket Commands", value="`!ticketpanel` `!add @user` `!remove @user`", inline=False)
+    embed.add_field(name="Staff Commands", value="`!close`", inline=False)
     await ctx.send(embed=embed)
 
 @bot.command(name='ping')
