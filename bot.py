@@ -24,13 +24,6 @@ class Bot(commands.Bot):
             except Exception as e:
                 print(f'❌ Failed to load {cog}: {e}')
 
-        try:
-            global_cmds = await self.tree.sync()
-            names = ', '.join(f'/{c.name}' for c in global_cmds)
-            print(f'✅ Global sync: {len(global_cmds)} command(s): {names}')
-        except Exception as e:
-            print(f'❌ Global sync error: {e}')
-
 
 bot = Bot(command_prefix='!', intents=intents, help_command=None)
 
@@ -40,11 +33,10 @@ async def on_ready():
     print(f'✅ Bot online: {bot.user} (ID: {bot.user.id})')
     for guild in bot.guilds:
         try:
-            bot.tree.copy_global_to(guild=guild)
             guild_cmds = await bot.tree.sync(guild=guild)
-            print(f'✅ Guild sync → {guild.name}: {[f"/{c.name}" for c in guild_cmds]}')
+            print(f'✅ Synced {len(guild_cmds)} command(s) to {guild.name}: {[f"/{c.name}" for c in guild_cmds]}')
         except Exception as e:
-            print(f'❌ Guild sync failed for {guild.name}: {e}')
+            print(f'❌ Sync failed for {guild.name}: {e}')
 
 
 @bot.command(name='sync')
@@ -58,12 +50,9 @@ async def sync_commands(ctx):
             except Exception as e:
                 print(f'❌ Reload failed for {cog}: {e}')
 
-        bot.tree.copy_global_to(guild=ctx.guild)
         guild_cmds = await bot.tree.sync(guild=ctx.guild)
-        global_cmds = await bot.tree.sync()
-
         names = ', '.join(f'/{c.name}' for c in guild_cmds)
-        await msg.edit(content=f'✅ Synced {len(guild_cmds)} guild + {len(global_cmds)} global command(s):\n{names}')
+        await msg.edit(content=f'✅ Synced {len(guild_cmds)} command(s):\n{names}')
     except Exception as e:
         await msg.edit(content=f'❌ Sync failed: {e}')
 
