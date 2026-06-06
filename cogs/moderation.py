@@ -9,8 +9,8 @@ from collections import defaultdict
 # ---------------------------------------------------------------------------
 
 STAFF_ROLE  = "Staff"
-MOD_ROLE    = "Mod"   # optional second mod role
-LOG_CHANNEL = "🔐・member-events"    # channel name where actions are logged
+MOD_ROLE    = "Moderator"   # optional second mod role
+LOG_CHANNEL = "mod-logs"    # channel name where actions are logged
 
 # In-memory warning store  { guild_id: { user_id: [ {reason, mod, ts}, ... ] } }
 # Resets on bot restart. Replace with a DB if you need persistence.
@@ -404,6 +404,89 @@ class Moderation(commands.Cog):
             timestamp=datetime.now(timezone.utc),
         )
         embed.set_footer(text=f"By {interaction.user}")
+        await _log(interaction, embed)
+
+
+    # ------------------------------------------------------------------
+    # /lock
+    # ------------------------------------------------------------------
+
+    @app_commands.command(name="lock", description="Lock the channel so only Staff can send messages")
+    @app_commands.describe(reason="Reason for locking")
+    @_mod_check()
+    async def lock(self, interaction: discord.Interaction, reason: str = "No reason provided."):
+        channel = interaction.channel
+        staff_role = discord.utils.get(interaction.guild.roles, name=STAFF_ROLE)
+        everyone = interaction.guild.default_role
+
+        # Check if already locked
+        overwrite = channel.overwrites_for(everyone)
+        if overwrite.send_messages is False:
+            await interaction.response.send_message("❌ This channel is already locked.", ephemeral=True)
+            return
+
+        try:
+            # Deny send_messages for @everyone
+            await channel.set_permissions(everyone, send_messages=False)
+            # Ensure Staff can still send
+            if staff_role:
+                await channel.set_permissions(staff_role, send_messages=True, read_messages=True)
+        except discord.Forbidden:
+            await interaction.response.send_message("❌ I don\'t have permission to edit this channel.", ephemeral=True)
+            return
+
+        embed = discord.Embed(
+            title="🔒 Channel Locked",
+            description=f"{channel.mention} has been locked.",
+            color=0xe74c3c,
+            timestamp=datetime.now(timezone.utc),
+        )
+        embed.add_field(name="Moderator", value=interaction.user.mention, inline=True)
+        embed.add_field(name="Reason", value=reason, inline=True)
+        embed.set_footer(text=f"Channel ID: {channel.id}")
+
+        await interaction.response.send_message(embed=embed)
+        await _log(interaction, embed)
+
+    # ------------------------------------------------------------------
+    # /unlock
+    # ------------------------------------------------------------------
+
+    @app_commands.command(name="unlock", description="Unlock the channel so everyone can send messages again")
+    @app_commands.describe(reason="Reason for unlocking")
+    @_mod_check()
+    async def unlock(self, interaction: discord.Interaction, reason: str = "No reason provided."):
+        channel = interaction.channel
+        staff_role = discord.utils.get(interaction.guild.roles, name=STAFF_ROLE)
+        everyone = interaction.guild.default_role
+
+        # Check if already unlocked
+        overwrite = channel.overwrites_for(everyone)
+        if overwrite.send_messages is not False:
+            await interaction.response.send_message("❌ This channel is not locked.", ephemeral=True)
+            return
+
+        try:
+            # Restore send_messages for @everyone (None = inherit from category/default)
+            await channel.set_permissions(everyone, send_messages=None)
+            # Remove the explicit Staff override too (let it inherit)
+            if staff_role:
+                await channel.set_permissions(staff_role, overwrite=None)
+        except discord.Forbidden:
+            await interaction.response.send_message("❌ I don\'t have permission to edit this channel.", ephemeral=True)
+            return
+
+        embed = discord.Embed(
+            title="🔓 Channel Unlocked",
+            description=f"{channel.mention} has been unlocked.",
+            color=0x2ecc71,
+            timestamp=datetime.now(timezone.utc),
+        )
+        embed.add_field(name="Moderator", value=interaction.user.mention, inline=True)
+        embed.add_field(name="Reason", value=reason, inline=True)
+        embed.set_footer(text=f"Channel ID: {channel.id}")
+
+        await interaction.response.send_message(embed=embed)
         await _log(interaction, embed)
 
 
