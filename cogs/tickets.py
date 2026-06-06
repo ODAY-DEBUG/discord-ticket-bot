@@ -176,6 +176,10 @@ class CategorySelect(discord.ui.Select):
                 await interaction.followup.send(
                     f"❌ You already have an open ticket: {ch.mention}", ephemeral=True
                 )
+                try:
+                    await interaction.message.edit(view=TicketPanelView())
+                except Exception:
+                    pass
                 return
 
         category = self.SELECT_MAP[self.values[0]]
@@ -240,6 +244,12 @@ class CategorySelect(discord.ui.Select):
             await channel.send(f"{mentions}\nNew **{category}** ticket from {interaction.user.mention}!")
 
         await interaction.followup.send(f"✅ Ticket created: {channel.mention}", ephemeral=True)
+
+        # Reset the dropdown back to the placeholder by re-sending a fresh view
+        try:
+            await interaction.message.edit(view=TicketPanelView())
+        except Exception:
+            pass
 
 
 class TicketPanelView(discord.ui.View):
