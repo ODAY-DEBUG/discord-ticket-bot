@@ -26,7 +26,7 @@ class TicketView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
     
-    @discord.ui.button(label="Request Close", style=discord.ButtonStyle.red, custom_id="req_close_v8", emoji="🔒")
+    @discord.ui.button(label="Request Close", style=discord.ButtonStyle.red, custom_id="req_close_v9", emoji="🔒")
     async def request_close_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
         creator_name = ""
         if interaction.channel.topic and "by " in interaction.channel.topic:
@@ -36,25 +36,17 @@ class TicketView(discord.ui.View):
             creator_name = interaction.channel.name.replace("ticket-", "").replace("claimed-", "").lower()
         
         if interaction.user.name.lower() != creator_name:
-            await interaction.response.send_message(
-                f"❌ Only the ticket creator can request closure!", 
-                ephemeral=True
-            )
+            await interaction.response.send_message("❌ Only the ticket creator can request closure!", ephemeral=True)
             return
         
         staff_role = discord.utils.get(interaction.guild.roles, name=STAFF_ROLE)
         if staff_role:
-            embed = discord.Embed(
-                title="🔒 Close Requested",
-                description=f"{staff_role.mention}\n\n**{interaction.user.mention}** has requested to close this ticket!",
-                color=discord.Color.orange()
-            )
-            embed.set_footer(text="Use /close to close this ticket")
-            await interaction.response.send_message(embed=embed)
+            # Send as normal message so it pings
+            await interaction.response.send_message(f"🔒 {staff_role.mention}\n**{interaction.user.mention}** has requested to close this ticket!")
         else:
             await interaction.response.send_message("✅ Close requested!", ephemeral=True)
     
-    @discord.ui.button(label="Close Ticket", style=discord.ButtonStyle.red, custom_id="close_v8", emoji="⛔")
+    @discord.ui.button(label="Close Ticket", style=discord.ButtonStyle.red, custom_id="close_v9", emoji="⛔")
     async def close_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
         staff_role = discord.utils.get(interaction.guild.roles, name=STAFF_ROLE)
         if not staff_role or staff_role not in interaction.user.roles:
@@ -68,14 +60,14 @@ class TicketView(discord.ui.View):
 class CategorySelect(discord.ui.Select):
     def __init__(self):
         options = [
-            discord.SelectOption(label="🏠 Base Buying", description="Purchase a base from someone", emoji="🏠"),
-            discord.SelectOption(label="🕳️ Bedrock Hole Buying", description="Buy a bedrock hole", emoji="🕳️"),
-            discord.SelectOption(label="🔄 Spawner Trading", description="Buy or sell spawners", emoji="🔄"),
-            discord.SelectOption(label="🏗️ Building", description="Request building services", emoji="🏗️"),
-            discord.SelectOption(label="❓ General Support", description="General help & questions", emoji="❓"),
-            discord.SelectOption(label="⚠️ Scam Report", description="Report a scam or fraud", emoji="⚠️"),
+            discord.SelectOption(label="🏠 Base Buying", description="Purchase a base", emoji="🏠"),
+            discord.SelectOption(label="🕳️ Bedrock Hole", description="Buy a bedrock hole", emoji="🕳️"),
+            discord.SelectOption(label="🔄 Spawner Trade", description="Buy/sell spawners", emoji="🔄"),
+            discord.SelectOption(label="🏗️ Building", description="Building services", emoji="🏗️"),
+            discord.SelectOption(label="❓ Support", description="General help", emoji="❓"),
+            discord.SelectOption(label="⚠️ Scam Report", description="Report a scam", emoji="⚠️"),
         ]
-        super().__init__(placeholder="🎫 Select ticket category...", options=options, custom_id="cat_select_v8")
+        super().__init__(placeholder="🎫 Select ticket category...", options=options, custom_id="cat_select_v9")
     
     async def callback(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
@@ -88,8 +80,17 @@ class CategorySelect(discord.ui.Select):
                 await interaction.followup.send(f"❌ You already have a ticket: {ch.mention}", ephemeral=True)
                 return
         
-        # Remove emoji from category name to get clean name
-        category = self.values[0].split(" ", 1)[1] if " " in self.values[0] else self.values[0]
+        # Map short labels to full names
+        category_map = {
+            "🏠 Base Buying": "Base Buying",
+            "🕳️ Bedrock Hole": "Bedrock Hole Buying",
+            "🔄 Spawner Trade": "Spawner Trading",
+            "🏗️ Building": "Building",
+            "❓ Support": "General Support",
+            "⚠️ Scam Report": "Scam Report",
+        }
+        
+        category = category_map[self.values[0]]
         
         configs = {
             "Base Buying": {
@@ -111,9 +112,9 @@ class CategorySelect(discord.ui.Select):
                 "color": 0x95a5a6,
                 "emoji": "🕳️",
                 "questions": [
-                    "**What size bedrock hole do you need?**",
+                    "**What size bedrock hole?**",
                     "**What is your budget?**",
-                    "**Do you need it in a specific location?**"
+                    "**Location requirements?**"
                 ]
             },
             "Spawner Trading": {
@@ -123,14 +124,14 @@ class CategorySelect(discord.ui.Select):
                 "color": 0xf1c40f,
                 "emoji": "🔄",
                 "questions": [
-                    "**Are you buying or selling?**",
+                    "**Buying or selling?**",
                     "**What type of spawners?**",
                     "**How many and what price?**"
                 ]
             },
             "Building": {
                 "discord_category": "🏗️ Building",
-                "ping_roles": [BUILDING_ROLE],
+                "ping_roles": [BUILDING_ROLE],  # Only Builder pinged, not staff
                 "allowed_roles": [STAFF_ROLE, BUILDING_ROLE],
                 "color": 0x9b59b6,
                 "emoji": "🏗️",
@@ -158,9 +159,9 @@ class CategorySelect(discord.ui.Select):
                 "color": 0xe74c3c,
                 "emoji": "⚠️",
                 "questions": [
-                    "**Who scammed you?** (Username and Discord ID)",
-                    "**What were you trying to trade/buy?**",
-                    "**Do you have proof?** (Please attach screenshots)"
+                    "**Who scammed you?** (Username + ID)",
+                    "**What were you trading/buying?**",
+                    "**Do you have proof?** (Screenshots)"
                 ]
             }
         }
@@ -189,15 +190,14 @@ class CategorySelect(discord.ui.Select):
             name=f"ticket-{interaction.user.name.lower()}",
             category=dc_cat,
             overwrites=overwrites,
-            topic=f"🎫 {category} | Created by {interaction.user.name} | {datetime.utcnow().strftime('%Y-%m-%d %H:%M')}"
+            topic=f"🎫 {category} | Created by {interaction.user.name}"
         )
         
         # Beautiful embed
         embed = discord.Embed(
             title=f"{cfg['emoji']} {category} Ticket",
             description=f"### Welcome {interaction.user.mention}!\n\n"
-                       f"Thank you for creating a ticket. Please answer the following questions "
-                       f"so our team can assist you quickly.\n\n"
+                       f"Thank you for creating a ticket. Please answer the questions below.\n\n"
                        f"━━━━━━━━━━━━━━━━━━━━━━━",
             color=cfg["color"],
             timestamp=datetime.utcnow()
@@ -209,36 +209,26 @@ class CategorySelect(discord.ui.Select):
         embed.add_field(name="\u200b", value="━━━━━━━━━━━━━━━━━━━━━━━", inline=False)
         embed.add_field(name="👤 Created By", value=interaction.user.mention, inline=True)
         embed.add_field(name="📂 Category", value=category, inline=True)
-        embed.add_field(name="🕐 Created", value=f"<t:{int(datetime.utcnow().timestamp())}:R>", inline=True)
         embed.set_footer(text=f"Ticket ID: {channel.id}")
         
         if interaction.guild.icon:
             embed.set_thumbnail(url=interaction.guild.icon.url)
         
-        # Send with buttons
+        # Send embed
         view = TicketView()
         await channel.send(embed=embed, view=view)
         
-        # Ping roles
-        ping_text = ""
+        # PING ROLES - Send as separate NORMAL message (not embed) so pings work
+        ping_message = ""
         for role_name in cfg["ping_roles"]:
             role = discord.utils.get(interaction.guild.roles, name=role_name)
             if role:
-                ping_text += f"{role.mention} "
+                ping_message += f"{role.mention} "
         
-        if ping_text:
-            ping_embed = discord.Embed(
-                description=f"🔔 {ping_text}\n\n📩 **New {category} ticket** from {interaction.user.mention}\n📁 Channel: {channel.mention}",
-                color=cfg["color"]
-            )
-            await channel.send(embed=ping_embed)
+        if ping_message:
+            await channel.send(f"{ping_message}\n📩 **New {category} ticket** from {interaction.user.mention}!")
         
-        # Send confirmation - the dropdown will reset naturally after interaction
-        await interaction.followup.send(
-            f"✅ **Ticket created!** {channel.mention}\n\n"
-            f"*You can close this message. The dropdown is ready for the next ticket.*",
-            ephemeral=True
-        )
+        await interaction.followup.send(f"✅ Ticket created: {channel.mention}", ephemeral=True)
 
 class Tickets(commands.Cog):
     def __init__(self, bot):
@@ -249,7 +239,7 @@ class Tickets(commands.Cog):
     @is_staff()
     async def rename(self, interaction: discord.Interaction, new_name: str):
         if not (interaction.channel.name.startswith("ticket-") or interaction.channel.name.startswith("claimed-")):
-            await interaction.response.send_message("❌ Use this in a ticket channel!", ephemeral=True)
+            await interaction.response.send_message("❌ Use in a ticket channel!", ephemeral=True)
             return
         
         clean_name = new_name.lower().replace(" ", "-")[:50]
@@ -273,7 +263,7 @@ class Tickets(commands.Cog):
     @is_staff()
     async def add(self, interaction: discord.Interaction, member: discord.Member):
         if not (interaction.channel.name.startswith("ticket-") or interaction.channel.name.startswith("claimed-")):
-            await interaction.response.send_message("❌ Use this in a ticket channel!", ephemeral=True)
+            await interaction.response.send_message("❌ Use in a ticket channel!", ephemeral=True)
             return
         await interaction.channel.set_permissions(member, read_messages=True, send_messages=True)
         await interaction.response.send_message(f"✅ {member.mention} added by {interaction.user.mention}")
@@ -283,7 +273,7 @@ class Tickets(commands.Cog):
     @is_staff()
     async def remove(self, interaction: discord.Interaction, member: discord.Member):
         if not (interaction.channel.name.startswith("ticket-") or interaction.channel.name.startswith("claimed-")):
-            await interaction.response.send_message("❌ Use this in a ticket channel!", ephemeral=True)
+            await interaction.response.send_message("❌ Use in a ticket channel!", ephemeral=True)
             return
         if member == interaction.user:
             await interaction.response.send_message("❌ Cannot remove yourself!", ephemeral=True)
@@ -294,7 +284,7 @@ class Tickets(commands.Cog):
     @app_commands.command(name="close", description="🔒 Close this ticket")
     async def close(self, interaction: discord.Interaction):
         if not (interaction.channel.name.startswith("ticket-") or interaction.channel.name.startswith("claimed-")):
-            await interaction.response.send_message("❌ Use this in a ticket channel!", ephemeral=True)
+            await interaction.response.send_message("❌ Use in a ticket channel!", ephemeral=True)
             return
         
         has_perm = False
@@ -359,10 +349,10 @@ class Tickets(commands.Cog):
         embed.add_field(
             name="📋 Categories",
             value="🏠 **Base Buying** — Purchase a base\n"
-                  "🕳️ **Bedrock Hole Buying** — Buy bedrock holes\n"
-                  "🔄 **Spawner Trading** — Buy/sell spawners\n"
+                  "🕳️ **Bedrock Hole** — Buy bedrock holes\n"
+                  "🔄 **Spawner Trade** — Buy/sell spawners\n"
                   "🏗️ **Building** — Building services\n"
-                  "❓ **General Support** — Help & questions\n"
+                  "❓ **Support** — General help\n"
                   "⚠️ **Scam Report** — Report scams",
             inline=False
         )
