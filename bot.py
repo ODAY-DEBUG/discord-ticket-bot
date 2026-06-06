@@ -12,7 +12,7 @@ intents.message_content = True
 intents.members = True
 intents.guilds = True
 
-COGS = ['cogs.tickets', 'cogs.moderation']
+COGS = ['cogs.tickets', 'cogs.moderation', 'cogs.giveaway']
 
 
 class Bot(commands.Bot):

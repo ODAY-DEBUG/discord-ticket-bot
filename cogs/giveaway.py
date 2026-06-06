@@ -1,0 +1,552 @@
+import discord
+from discord.ext import commands, tasks
+from discord import app_commands
+import asyncio
+from datetime import datetime, timedelta, timezone
+import json
+import os
+import random
+from typing import Optional, List
+
+# ---------------------------------------------------------------------------
+# Config
+# ---------------------------------------------------------------------------
+
+GIVEAWAYS_FILE = "giveaways.json"
+STAFF_ROLE = "Staff"
+
+# ---------------------------------------------------------------------------
+# Data persistence
+# ---------------------------------------------------------------------------
+
+class GiveawayData:
+    def __init__(self):
+        self.active_giveaways = {}  # {message_id: Giveaway}
+        self.load_data()
+    
+    def load_data(self):
+        if os.path.exists(GIVEAWAYS_FILE):
+            try:
+                with open(GIVEAWAYS_FILE, 'r') as f:
+                    data = json.load(f)
+                    # Convert saved data back to Giveaway objects
+                    for msg_id, giveaway_data in data.items():
+                        giveaway = Giveaway.from_dict(giveaway_data)
+                        self.active_giveaways[int(msg_id)] = giveaway
+                print(f"✅ Loaded {len(self.active_giveaways)} active giveaways")
+            except Exception as e:
+                print(f"❌ Failed to load giveaways: {e}")
+    
+    def save_data(self):
+        try:
+            data = {}
+            for msg_id, giveaway in self.active_giveaways.items():
+                data[str(msg_id)] = giveaway.to_dict()
+            with open(GIVEAWAYS_FILE, 'w') as f:
+                json.dump(data, f, indent=2)
+        except Exception as e:
+            print(f"❌ Failed to save giveaways: {e}")
+    
+    def add_giveaway(self, message_id: int, giveaway):
+        self.active_giveaways[message_id] = giveaway
+        self.save_data()
+    
+    def remove_giveaway(self, message_id: int):
+        if message_id in self.active_giveaways:
+            del self.active_giveaways[message_id]
+            self.save_data()
+
+
+class Giveaway:
+    def __init__(self, channel_id: int, end_time: datetime, prize: str, 
+                 winners_count: int, title: str, description: str,
+                 host_id: int, message_id: int = None):
+        self.channel_id = channel_id
+        self.end_time = end_time
+        self.prize = prize
+        self.winners_count = winners_count
+        self.title = title
+        self.description = description
+        self.host_id = host_id
+        self.message_id = message_id
+        self.entries = []  # List of user IDs
+        self.ended = False
+    
+    def to_dict(self):
+        return {
+            'channel_id': self.channel_id,
+            'end_time': self.end_time.isoformat(),
+            'prize': self.prize,
+            'winners_count': self.winners_count,
+            'title': self.title,
+            'description': self.description,
+            'host_id': self.host_id,
+            'message_id': self.message_id,
+            'entries': self.entries,
+            'ended': self.ended
+        }
+    
+    @classmethod
+    def from_dict(cls, data):
+        giveaway = cls(
+            channel_id=data['channel_id'],
+            end_time=datetime.fromisoformat(data['end_time']),
+            prize=data['prize'],
+            winners_count=data['winners_count'],
+            title=data['title'],
+            description=data['description'],
+            host_id=data['host_id'],
+            message_id=data.get('message_id')
+        )
+        giveaway.entries = data.get('entries', [])
+        giveaway.ended = data.get('ended', False)
+        return giveaway
+    
+    def add_entry(self, user_id: int):
+        if user_id not in self.entries:
+            self.entries.append(user_id)
+            return True
+        return False
+    
+    def pick_winners(self) -> List[int]:
+        if not self.entries:
+            return []
+        # Remove duplicates just in case
+        unique_entries = list(set(self.entries))
+        if len(unique_entries) <= self.winners_count:
+            return unique_entries
+        return random.sample(unique_entries, self.winners_count)
+
+
+# ---------------------------------------------------------------------------
+# Winner Claim View
+# ---------------------------------------------------------------------------
+
+class WinnerClaimView(discord.ui.View):
+    def __init__(self, winners: List[int], prize: str, giveaway_channel_id: int, giveaway_message_id: int):
+        super().__init__(timeout=600)  # 10 minutes timeout
+        self.winners = winners
+        self.prize = prize
+        self.giveaway_channel_id = giveaway_channel_id
+        self.giveaway_message_id = giveaway_message_id
+        self.claimed_users = set()
+        
+        # Add claim buttons for each winner
+        for winner_id in winners:
+            button = discord.ui.Button(
+                label=f"Claim Prize - {prize[:30]}",
+                style=discord.ButtonStyle.green,
+                custom_id=f"claim_{winner_id}_{giveaway_message_id}"
+            )
+            button.callback = self.create_callback(winner_id)
+            self.add_item(button)
+    
+    def create_callback(self, winner_id: int):
+        async def callback(interaction: discord.Interaction):
+            if interaction.user.id != winner_id:
+                await interaction.response.send_message("❌ This claim button is not for you!", ephemeral=True)
+                return
+            
+            if winner_id in self.claimed_users:
+                await interaction.response.send_message("❌ You have already claimed your prize!", ephemeral=True)
+                return
+            
+            # Create claim ticket
+            await self.create_claim_ticket(interaction, winner_id)
+            
+        return callback
+    
+    async def create_claim_ticket(self, interaction: discord.Interaction, winner_id: int):
+        guild = interaction.guild
+        
+        # Check for existing open ticket
+        uname = interaction.user.name.lower()
+        for channel in guild.text_channels:
+            if (channel.name.startswith("ticket-") or channel.name.startswith("claimed-")) and \
+               channel.name.endswith(f"-{uname}"):
+                await interaction.response.send_message(
+                    f"❌ You already have an open ticket: {channel.mention}\nPlease close that ticket first.",
+                    ephemeral=True
+                )
+                return
+        
+        # Get or create claim tickets category
+        claim_category = discord.utils.get(guild.categories, name="Claim Tickets")
+        if not claim_category:
+            claim_category = await guild.create_category("Claim Tickets")
+            await claim_category.set_permissions(guild.default_role, read_messages=False)
+        
+        # Setup permissions
+        overwrites = {
+            guild.default_role: discord.PermissionOverwrite(read_messages=False),
+            interaction.user: discord.PermissionOverwrite(
+                read_messages=True, send_messages=True,
+                read_message_history=True, attach_files=True
+            ),
+        }
+        
+        # Add Staff role
+        staff_role = discord.utils.get(guild.roles, name=STAFF_ROLE)
+        if staff_role:
+            overwrites[staff_role] = discord.PermissionOverwrite(
+                read_messages=True, send_messages=True,
+                read_message_history=True
+            )
+        
+        # Create ticket channel
+        channel = await guild.create_text_channel(
+            name=f"claim-{uname}",
+            category=claim_category,
+            overwrites=overwrites,
+            topic=f"Prize Claim for {interaction.user.name} | Giveaway Prize: {self.prize}"
+        )
+        
+        # Create embed
+        embed = discord.Embed(
+            title="🎉 Prize Claim Ticket",
+            description=f"**Winner:** {interaction.user.mention}\n"
+                       f"**Prize:** {self.prize}\n\n"
+                       "Please wait for a staff member to assist you with your prize.",
+            color=0x00ff00,
+            timestamp=datetime.now(timezone.utc)
+        )
+        
+        # Get the original giveaway message link
+        giveaway_channel = guild.get_channel(self.giveaway_channel_id)
+        if giveaway_channel:
+            giveaway_link = f"https://discord.com/channels/{guild.id}/{self.giveaway_channel_id}/{self.giveaway_message_id}"
+            embed.add_field(name="Giveaway Link", value=f"[Click here]({giveaway_link})", inline=False)
+        
+        embed.set_footer(text=f"User ID: {interaction.user.id}")
+        
+        # Create close button for ticket
+        class CloseTicketButton(discord.ui.View):
+            def __init__(self):
+                super().__init__(timeout=None)
+            
+            @discord.ui.button(label="Close Ticket", style=discord.ButtonStyle.red, custom_id="close_claim_ticket")
+            async def close_button(self, close_interaction: discord.Interaction, button: discord.ui.Button):
+                if not (staff_role and staff_role in close_interaction.user.roles) and \
+                   not close_interaction.user.guild_permissions.administrator:
+                    await close_interaction.response.send_message("❌ Staff only!", ephemeral=True)
+                    return
+                
+                await close_interaction.response.send_message("🔒 Closing ticket in 5 seconds...")
+                await asyncio.sleep(5)
+                try:
+                    await close_interaction.channel.delete()
+                except:
+                    pass
+        
+        await channel.send(embed=embed, view=CloseTicketButton())
+        
+        # Notify staff
+        if staff_role:
+            await channel.send(f"{staff_role.mention} New prize claim ticket from {interaction.user.mention}!")
+        
+        self.claimed_users.add(winner_id)
+        await interaction.response.send_message(
+            f"✅ Claim ticket created: {channel.mention}\n"
+            f"Please wait for staff assistance. The ticket will be used to distribute your prize.",
+            ephemeral=True
+        )
+    
+    async def on_timeout(self):
+        # Disable all buttons after timeout
+        for item in self.children:
+            item.disabled = True
+        
+        # Try to edit the original message to remove buttons
+        try:
+            # Find the original message (this is tricky, we'd need to store the message reference)
+            # For now, we'll just log it
+            print(f"Claim view timed out for giveaway {self.giveaway_message_id}")
+        except:
+            pass
+
+
+class GiveawayButton(discord.ui.Button):
+    def __init__(self, giveaway_data: GiveawayData, giveaway: Giveaway):
+        super().__init__(label="🎉 Enter Giveaway", style=discord.ButtonStyle.primary, custom_id=f"enter_{giveaway.message_id}")
+        self.giveaway_data = giveaway_data
+        self.giveaway = giveaway
+    
+    async def callback(self, interaction: discord.Interaction):
+        if self.giveaway.ended:
+            await interaction.response.send_message("❌ This giveaway has already ended!", ephemeral=True)
+            return
+        
+        if datetime.now(timezone.utc) > self.giveaway.end_time:
+            await interaction.response.send_message("❌ This giveaway has already ended!", ephemeral=True)
+            return
+        
+        if self.giveaway.add_entry(interaction.user.id):
+            self.giveaway_data.save_data()
+            await interaction.response.send_message("✅ You have entered the giveaway! Good luck! 🎉", ephemeral=True)
+        else:
+            await interaction.response.send_message("❌ You have already entered this giveaway!", ephemeral=True)
+
+
+class GiveawayView(discord.ui.View):
+    def __init__(self, giveaway_data: GiveawayData, giveaway: Giveaway):
+        super().__init__(timeout=None)
+        self.add_item(GiveawayButton(giveaway_data, giveaway))
+
+
+# ---------------------------------------------------------------------------
+# Giveaway Cog
+# ---------------------------------------------------------------------------
+
+class Giveaways(commands.Cog):
+    def __init__(self, bot: commands.Bot):
+        self.bot = bot
+        self.giveaway_data = GiveawayData()
+        self.check_giveaways.start()
+    
+    def cog_unload(self):
+        self.check_giveaways.cancel()
+    
+    @tasks.loop(seconds=30)
+    async def check_giveaways(self):
+        """Background task to check and end giveaways"""
+        now = datetime.now(timezone.utc)
+        ended_giveaways = []
+        
+        for msg_id, giveaway in self.giveaway_data.active_giveaways.items():
+            if not giveaway.ended and now >= giveaway.end_time:
+                ended_giveaways.append((msg_id, giveaway))
+        
+        for msg_id, giveaway in ended_giveaways:
+            await self.end_giveaway(msg_id, giveaway)
+    
+    async def end_giveaway(self, message_id: int, giveaway: Giveaway):
+        """End a giveaway and announce winners"""
+        giveaway.ended = True
+        
+        channel = self.bot.get_channel(giveaway.channel_id)
+        if not channel:
+            print(f"Channel not found for giveaway {message_id}")
+            self.giveaway_data.remove_giveaway(message_id)
+            return
+        
+        try:
+            original_msg = await channel.fetch_message(message_id)
+        except:
+            print(f"Original message not found for giveaway {message_id}")
+            self.giveaway_data.remove_giveaway(message_id)
+            return
+        
+        # Pick winners
+        winners = giveaway.pick_winners()
+        
+        # Create results embed
+        results_embed = discord.Embed(
+            title=f"🎉 {giveaway.title} - GIVEAWAY ENDED 🎉",
+            description=f"{giveaway.description}\n\n**Prize:** {giveaway.prize}",
+            color=0xff0000,
+            timestamp=datetime.now(timezone.utc)
+        )
+        
+        if winners:
+            winner_mentions = [f"<@{w}>" for w in winners]
+            results_embed.add_field(
+                name=f"🏆 Winners ({len(winners)})",
+                value=", ".join(winner_mentions),
+                inline=False
+            )
+            
+            # Create claim view for winners
+            claim_view = WinnerClaimView(
+                winners, giveaway.prize, 
+                giveaway.channel_id, message_id
+            )
+            
+            # Add instructions for claiming
+            results_embed.add_field(
+                name="📝 How to Claim",
+                value="Click the **Claim Prize** button below within 10 minutes to open a claim ticket!",
+                inline=False
+            )
+            
+            await original_msg.edit(embed=results_embed, view=claim_view)
+            
+            # Also send a separate announcement
+            announcement_embed = discord.Embed(
+                title="🎉 Giveaway Winners Announced! 🎉",
+                description=f"**Giveaway:** {giveaway.title}\n"
+                           f"**Prize:** {giveaway.prize}\n\n"
+                           f"**Winners:** {', '.join(winner_mentions)}",
+                color=0x00ff00,
+                timestamp=datetime.now(timezone.utc)
+            )
+            announcement_embed.set_footer(text="Winners have 10 minutes to claim their prize!")
+            
+            await channel.send(embed=announcement_embed)
+            
+            # DM winners
+            for winner_id in winners:
+                try:
+                    user = await self.bot.fetch_user(winner_id)
+                    dm_embed = discord.Embed(
+                        title="🎉 Congratulations! You won a giveaway! 🎉",
+                        description=f"You won **{giveaway.prize}** in **{giveaway.title}**!\n\n"
+                                   f"Please go to {channel.mention} and click the **Claim Prize** button "
+                                   f"within 10 minutes to claim your prize.",
+                        color=0x00ff00
+                    )
+                    await user.send(embed=dm_embed)
+                except:
+                    pass
+        
+        else:
+            results_embed.add_field(
+                name="❌ No Winners",
+                value="No one entered this giveaway!",
+                inline=False
+            )
+            await original_msg.edit(embed=results_embed, view=None)
+        
+        # Remove from active giveaways
+        self.giveaway_data.remove_giveaway(message_id)
+    
+    # ------------------------------------------------------------------
+    # Commands
+    # ------------------------------------------------------------------
+    
+    @app_commands.command(name="giveaway", description="Create a new giveaway (Admin only)")
+    @app_commands.describe(
+        channel="Channel to post the giveaway",
+        title="Title of the giveaway",
+        description="Description of the giveaway",
+        prize="What users can win",
+        winners="Number of winners",
+        duration_days="Days until giveaway ends",
+        duration_hours="Hours until giveaway ends",
+        duration_minutes="Minutes until giveaway ends"
+    )
+    async def create_giveaway(
+        self,
+        interaction: discord.Interaction,
+        channel: discord.TextChannel,
+        title: str,
+        description: str,
+        prize: str,
+        winners: int = 1,
+        duration_days: int = 0,
+        duration_hours: int = 0,
+        duration_minutes: int = 0,
+    ):
+        # Check permissions
+        if not interaction.user.guild_permissions.administrator:
+            await interaction.response.send_message("❌ Admin only command!", ephemeral=True)
+            return
+        
+        # Calculate end time
+        total_minutes = (duration_days * 1440) + (duration_hours * 60) + duration_minutes
+        if total_minutes <= 0:
+            await interaction.response.send_message("❌ Please specify a duration greater than 0 minutes!", ephemeral=True)
+            return
+        
+        end_time = datetime.now(timezone.utc) + timedelta(minutes=total_minutes)
+        
+        # Validate winners count
+        if winners < 1 or winners > 25:
+            await interaction.response.send_message("❌ Winners must be between 1 and 25!", ephemeral=True)
+            return
+        
+        # Create giveaway embed
+        embed = discord.Embed(
+            title=f"🎉 {title} 🎉",
+            description=description,
+            color=0x00ff00,
+            timestamp=datetime.now(timezone.utc)
+        )
+        embed.add_field(name="🎁 Prize", value=prize, inline=False)
+        embed.add_field(name="👑 Winners", value=str(winners), inline=True)
+        
+        # Format end time
+        end_timestamp = int(end_time.timestamp())
+        embed.add_field(name="⏰ Ends", value=f"<t:{end_timestamp}:F> (<t:{end_timestamp}:R>)", inline=True)
+        
+        embed.add_field(name="📊 Total Entries", value="0", inline=False)
+        embed.set_footer(text=f"Hosted by {interaction.user.name}", icon_url=interaction.user.display_avatar.url)
+        
+        # Create giveaway object
+        giveaway = Giveaway(
+            channel_id=channel.id,
+            end_time=end_time,
+            prize=prize,
+            winners_count=winners,
+            title=title,
+            description=description,
+            host_id=interaction.user.id
+        )
+        
+        # Send message and save
+        await interaction.response.send_message("✅ Creating giveaway...", ephemeral=True)
+        
+        view = GiveawayView(self.giveaway_data, giveaway)
+        message = await channel.send(embed=embed, view=view)
+        
+        giveaway.message_id = message.id
+        self.giveaway_data.add_giveaway(message.id, giveaway)
+        
+        await interaction.edit_original_response(content=f"✅ Giveaway created in {channel.mention}!")
+    
+    @app_commands.command(name="endgiveaway", description="Force end a giveaway early (Admin only)")
+    @app_commands.describe(message_id="The message ID of the giveaway")
+    async def end_giveaway_early(self, interaction: discord.Interaction, message_id: str):
+        if not interaction.user.guild_permissions.administrator:
+            await interaction.response.send_message("❌ Admin only command!", ephemeral=True)
+            return
+        
+        try:
+            msg_id = int(message_id)
+        except ValueError:
+            await interaction.response.send_message("❌ Invalid message ID!", ephemeral=True)
+            return
+        
+        if msg_id not in self.giveaway_data.active_giveaways:
+            await interaction.response.send_message("❌ Giveaway not found or already ended!", ephemeral=True)
+            return
+        
+        giveaway = self.giveaway_data.active_giveaways[msg_id]
+        await self.end_giveaway(msg_id, giveaway)
+        await interaction.response.send_message("✅ Giveaway ended!", ephemeral=True)
+    
+    @app_commands.command(name="reroll", description="Reroll a giveaway winner (Admin only)")
+    @app_commands.describe(message_id="The message ID of the ended giveaway")
+    async def reroll_giveaway(self, interaction: discord.Interaction, message_id: str):
+        if not interaction.user.guild_permissions.administrator:
+            await interaction.response.send_message("❌ Admin only command!", ephemeral=True)
+            return
+        
+        await interaction.response.defer()
+        
+        try:
+            msg_id = int(message_id)
+        except ValueError:
+            await interaction.followup.send("❌ Invalid message ID!", ephemeral=True)
+            return
+        
+        # Try to find the original message
+        found = False
+        for channel in interaction.guild.text_channels:
+            try:
+                msg = await channel.fetch_message(msg_id)
+                if msg.embeds and "GIVEAWAY ENDED" in msg.embeds[0].title:
+                    # Found the giveaway message
+                    # In a real implementation, you'd need to store the entries
+                    # For now, let's say we can't reroll without stored data
+                    await interaction.followup.send("❌ Reroll feature requires stored entries. Please re-run the giveaway instead.", ephemeral=True)
+                    found = True
+                    break
+            except:
+                continue
+        
+        if not found:
+            await interaction.followup.send("❌ Giveaway message not found!", ephemeral=True)
+
+
+async def setup(bot: commands.Bot):
+    await bot.add_cog(Giveaways(bot))
