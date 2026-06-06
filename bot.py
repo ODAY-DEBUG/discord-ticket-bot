@@ -31,8 +31,15 @@ bot = Bot(command_prefix='!', intents=intents, help_command=None)
 @bot.event
 async def on_ready():
     print(f'✅ Bot online: {bot.user} (ID: {bot.user.id})')
+    
+    # Wait a bit for the cache to be fully ready
+    await asyncio.sleep(2)
+    
+    # Sync commands for each guild
     for guild in bot.guilds:
         try:
+            # Sync commands globally or per guild
+            bot.tree.copy_global_to(guild=guild)
             guild_cmds = await bot.tree.sync(guild=guild)
             print(f'✅ Synced {len(guild_cmds)} command(s) to {guild.name}: {[f"/{c.name}" for c in guild_cmds]}')
         except Exception as e:
@@ -44,12 +51,16 @@ async def on_ready():
 async def sync_commands(ctx):
     msg = await ctx.send('🔄 Reloading all cogs and syncing...')
     try:
+        # Reload cogs
         for cog in COGS:
             try:
                 await bot.reload_extension(cog)
+                print(f'✅ Reloaded {cog}')
             except Exception as e:
                 print(f'❌ Reload failed for {cog}: {e}')
-
+        
+        # Sync commands
+        bot.tree.copy_global_to(guild=ctx.guild)
         guild_cmds = await bot.tree.sync(guild=ctx.guild)
         names = ', '.join(f'/{c.name}' for c in guild_cmds)
         await msg.edit(content=f'✅ Synced {len(guild_cmds)} command(s):\n{names}')
@@ -71,24 +82,28 @@ async def reload_cog(ctx, cog: str = ''):
     await ctx.send('\n'.join(results))
 
 
+@bot.command(name='listcogs')
+@commands.has_permissions(administrator=True)
+async def list_cogs(ctx):
+    """List all loaded cogs and commands"""
+    loaded = list(bot.extensions.keys())
+    await ctx.send(f"Loaded cogs: {', '.join(loaded) if loaded else 'None'}")
+
+
 def main():
     token = os.getenv('DISCORD_TOKEN')
     if not token:
         raise RuntimeError('DISCORD_TOKEN environment variable is not set.')
 
-    loop = asyncio.get_event_loop()
-
-    def _shutdown(sig):
-        print(f'Received {sig.name}, shutting down gracefully...')
-        loop.create_task(bot.close())
-
-    for sig in (signal.SIGTERM, signal.SIGINT):
-        try:
-            loop.add_signal_handler(sig, _shutdown, sig)
-        except NotImplementedError:
-            pass
-
-    bot.run(token, log_handler=None)
+    # Fix for the deprecation warning - use asyncio.run() instead of get_event_loop()
+    async def run_bot():
+        async with bot:
+            await bot.start(token)
+    
+    try:
+        asyncio.run(run_bot())
+    except KeyboardInterrupt:
+        print("Bot stopped by user")
 
 
 if __name__ == '__main__':
