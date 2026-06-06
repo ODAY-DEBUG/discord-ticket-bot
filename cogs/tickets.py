@@ -27,8 +27,38 @@ class TicketView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
     
-    @discord.ui.button(label="🔒 Close Ticket", style=discord.ButtonStyle.red, custom_id="close_ticket_v4", emoji="🔒")
+    @discord.ui.button(label="Request Close", style=discord.ButtonStyle.red, custom_id="request_close_v5", emoji="🔒")
+    async def request_close_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
+        """Request ticket closure - only ticket creator can use"""
+        creator_name = interaction.channel.name.replace("ticket-", "").replace("claimed-", "")
+        
+        # Only ticket creator can request close
+        if interaction.user.name.lower() != creator_name.lower():
+            await interaction.response.send_message("❌ Only the ticket creator can request closure!", ephemeral=True)
+            return
+        
+        # Ping staff
+        staff_role = discord.utils.get(interaction.guild.roles, name=STAFF_ROLE)
+        if staff_role:
+            embed = discord.Embed(
+                title="🔒 Close Request",
+                description=f"{staff_role.mention} **{interaction.user.mention}** has requested to close this ticket!",
+                color=discord.Color.orange()
+            )
+            embed.set_footer(text="Use /close to close this ticket")
+            await interaction.response.send_message(embed=embed)
+        else:
+            await interaction.response.send_message("✅ Close requested! Staff will review shortly.", ephemeral=True)
+    
+    @discord.ui.button(label="Close Ticket", style=discord.ButtonStyle.red, custom_id="close_ticket_v5", emoji="⛔")
     async def close_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
+        """Close ticket - staff only"""
+        # Check if staff
+        staff_role = discord.utils.get(interaction.guild.roles, name=STAFF_ROLE)
+        if not staff_role or staff_role not in interaction.user.roles:
+            await interaction.response.send_message("❌ Only staff can close tickets directly!", ephemeral=True)
+            return
+        
         await interaction.response.send_message("Closing ticket in 5 seconds...")
         await asyncio.sleep(5)
         await interaction.channel.delete()
@@ -43,7 +73,7 @@ class CategorySelect(discord.ui.Select):
             discord.SelectOption(label="Building", description="Request building services", emoji="🏗️"),
             discord.SelectOption(label="Scam Report", description="Report a scam or fraud", emoji="⚠️"),
         ]
-        super().__init__(placeholder="🎫 Select ticket category...", options=options, custom_id="category_select_v4")
+        super().__init__(placeholder="🎫 Select ticket category...", options=options, custom_id="category_select_v5")
     
     async def callback(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
@@ -109,8 +139,8 @@ class CategorySelect(discord.ui.Select):
             },
             "Building": {
                 "discord_category": "🏗️ Building",
-                "ping_roles": [STAFF_ROLE, BUILDING_ROLE],
-                "allowed_roles": [STAFF_ROLE, BUILDING_ROLE],
+                "ping_roles": [BUILDING_ROLE],  # ONLY Builder role, no staff
+                "allowed_roles": [STAFF_ROLE, BUILDING_ROLE],  # Staff can still see but not pinged
                 "color": 0x9b59b6,
                 "thumbnail": "🏗️",
                 "questions": [
@@ -184,30 +214,16 @@ class CategorySelect(discord.ui.Select):
             inline=False
         )
         
-        embed.add_field(
-            name="👤 Created By",
-            value=interaction.user.mention,
-            inline=True
-        )
-        
-        embed.add_field(
-            name="📂 Category",
-            value=category,
-            inline=True
-        )
-        
-        embed.add_field(
-            name="🕐 Created",
-            value=f"<t:{int(datetime.utcnow().timestamp())}:R>",
-            inline=True
-        )
+        embed.add_field(name="👤 Created By", value=interaction.user.mention, inline=True)
+        embed.add_field(name="📂 Category", value=category, inline=True)
+        embed.add_field(name="🕐 Created", value=f"<t:{int(datetime.utcnow().timestamp())}:R>", inline=True)
         
         embed.set_footer(text=f"Ticket ID: {channel.id} • Use /close to close this ticket")
         
         if interaction.guild.icon:
             embed.set_thumbnail(url=interaction.guild.icon.url)
         
-        # Send ticket with close button
+        # Send ticket with buttons
         view = TicketView()
         await channel.send(embed=embed, view=view)
         
@@ -237,7 +253,6 @@ class Tickets(commands.Cog):
     @app_commands.default_permissions(administrator=True)
     async def ticketpanel(self, interaction: discord.Interaction):
         """Create ticket panel"""
-        # Delete old bot messages
         async for msg in interaction.channel.history(limit=20):
             if msg.author == self.bot.user:
                 try:
@@ -271,15 +286,6 @@ class Tickets(commands.Cog):
             inline=False
         )
         
-        embed.add_field(
-            name="📌 Rules",
-            value="> • Be respectful to staff\n"
-                  "> • Provide accurate information\n"
-                  "> • Do not create unnecessary tickets\n"
-                  "> • One ticket per issue",
-            inline=False
-        )
-        
         embed.set_footer(text="Select a category from the dropdown below to begin ✨")
         
         if interaction.guild.icon:
@@ -289,6 +295,43 @@ class Tickets(commands.Cog):
         view.add_item(CategorySelect())
         
         await interaction.response.send_message(embed=embed, view=view)
+    
+    @app_commands.command(name="rename", description="✏️ Rename this ticket channel")
+    @app_commands.describe(new_name="The new name for this ticket channel")
+    @is_staff()
+    async def rename_ticket(self, interaction: discord.Interaction, new_name: str):
+        """Rename ticket channel"""
+        if not interaction.channel.name.startswith("ticket-") and not interaction.channel.name.startswith("claimed-"):
+            await interaction.response.send_message("❌ This command can only be used in ticket channels!", ephemeral=True)
+            return
+        
+        old_name = interaction.channel.name
+        
+        # Keep the prefix (ticket- or claimed-)
+        if interaction.channel.name.startswith("claimed-"):
+            # Get claimer part
+            parts = old_name.split("-", 2)
+            if len(parts) >= 2:
+                prefix = f"claimed-{parts[1]}-"
+                new_channel_name = f"{prefix}{new_name.lower().replace(' ', '-')}"
+            else:
+                new_channel_name = f"claimed-{new_name.lower().replace(' ', '-')}"
+        else:
+            new_channel_name = f"ticket-{new_name.lower().replace(' ', '-')}"
+        
+        # Trim to 100 chars
+        if len(new_channel_name) > 100:
+            new_channel_name = new_channel_name[:100]
+        
+        try:
+            await interaction.channel.edit(name=new_channel_name)
+            embed = discord.Embed(
+                description=f"✅ Channel renamed from **{old_name}** to **{new_channel_name}** by {interaction.user.mention}",
+                color=discord.Color.green()
+            )
+            await interaction.response.send_message(embed=embed)
+        except Exception as e:
+            await interaction.response.send_message(f"❌ Error: {e}", ephemeral=True)
     
     @app_commands.command(name="add", description="➕ Add a user to this ticket")
     @app_commands.describe(member="The user to add to the ticket")
