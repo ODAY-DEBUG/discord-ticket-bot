@@ -26,27 +26,22 @@ class TicketView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
     
-    @discord.ui.button(label="Request Close", style=discord.ButtonStyle.red, custom_id="req_close_v7", emoji="🔒")
+    @discord.ui.button(label="Request Close", style=discord.ButtonStyle.red, custom_id="req_close_v8", emoji="🔒")
     async def request_close_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
-        # Get the creator from channel topic
         creator_name = ""
         if interaction.channel.topic and "by " in interaction.channel.topic:
-            # Topic format: "Ticket by username | Category"
             topic_part = interaction.channel.topic.split("by ")[1]
             creator_name = topic_part.split(" |")[0].strip().lower()
         else:
-            # Fallback to channel name
             creator_name = interaction.channel.name.replace("ticket-", "").replace("claimed-", "").lower()
         
-        # Check if user is the creator
         if interaction.user.name.lower() != creator_name:
             await interaction.response.send_message(
-                f"❌ Only the ticket creator ({creator_name}) can request closure!", 
+                f"❌ Only the ticket creator can request closure!", 
                 ephemeral=True
             )
             return
         
-        # Ping staff
         staff_role = discord.utils.get(interaction.guild.roles, name=STAFF_ROLE)
         if staff_role:
             embed = discord.Embed(
@@ -57,13 +52,13 @@ class TicketView(discord.ui.View):
             embed.set_footer(text="Use /close to close this ticket")
             await interaction.response.send_message(embed=embed)
         else:
-            await interaction.response.send_message("✅ Close requested! A staff member will review shortly.", ephemeral=True)
+            await interaction.response.send_message("✅ Close requested!", ephemeral=True)
     
-    @discord.ui.button(label="Close Ticket", style=discord.ButtonStyle.red, custom_id="close_v7", emoji="⛔")
+    @discord.ui.button(label="Close Ticket", style=discord.ButtonStyle.red, custom_id="close_v8", emoji="⛔")
     async def close_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
         staff_role = discord.utils.get(interaction.guild.roles, name=STAFF_ROLE)
         if not staff_role or staff_role not in interaction.user.roles:
-            await interaction.response.send_message("❌ Only staff can close tickets directly!", ephemeral=True)
+            await interaction.response.send_message("❌ Only staff can close tickets!", ephemeral=True)
             return
         
         await interaction.response.send_message("🔒 Closing in 5 seconds...")
@@ -80,7 +75,7 @@ class CategorySelect(discord.ui.Select):
             discord.SelectOption(label="❓ General Support", description="General help & questions", emoji="❓"),
             discord.SelectOption(label="⚠️ Scam Report", description="Report a scam or fraud", emoji="⚠️"),
         ]
-        super().__init__(placeholder="🎫 Select ticket category...", options=options, custom_id="cat_select_v7")
+        super().__init__(placeholder="🎫 Select ticket category...", options=options, custom_id="cat_select_v8")
     
     async def callback(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
@@ -93,7 +88,7 @@ class CategorySelect(discord.ui.Select):
                 await interaction.followup.send(f"❌ You already have a ticket: {ch.mention}", ephemeral=True)
                 return
         
-        # Remove emoji from category name
+        # Remove emoji from category name to get clean name
         category = self.values[0].split(" ", 1)[1] if " " in self.values[0] else self.values[0]
         
         configs = {
@@ -238,10 +233,10 @@ class CategorySelect(discord.ui.Select):
             )
             await channel.send(embed=ping_embed)
         
-        # Send confirmation that resets the dropdown
+        # Send confirmation - the dropdown will reset naturally after interaction
         await interaction.followup.send(
-            f"✅ Ticket created: {channel.mention}\n\n"
-            f"*The dropdown has been reset - you can create another ticket if needed.*",
+            f"✅ **Ticket created!** {channel.mention}\n\n"
+            f"*You can close this message. The dropdown is ready for the next ticket.*",
             ephemeral=True
         )
 
@@ -318,12 +313,8 @@ class Tickets(commands.Cog):
             await interaction.response.send_message("❌ No permission!", ephemeral=True)
             return
         
-        # Transcript
         transcript = io.BytesIO()
-        content = f"Ticket: {interaction.channel.name}\n"
-        content += f"Closed by: {interaction.user}\n"
-        content += f"Date: {datetime.utcnow()}\n"
-        content += "=" * 50 + "\n\n"
+        content = f"Ticket: {interaction.channel.name}\nClosed by: {interaction.user}\nDate: {datetime.utcnow()}\n" + "=" * 50 + "\n\n"
         
         async for msg in interaction.channel.history(limit=None, oldest_first=True):
             content += f"[{msg.created_at}] {msg.author}: {msg.content}\n"
