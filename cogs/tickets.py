@@ -5,20 +5,18 @@ import asyncio
 import io
 from datetime import datetime
 
-# ===== CONFIGURATION =====
 STAFF_ROLE = "Staff"
 BASE_BUYING_ROLE = "Base Seller"
 BEDROCK_ROLE = "Bedrock Seller"
 SPAWNER_ROLE = "Spawner Trader"
 BUILDING_ROLE = "Builder"
-# =========================
 
 def is_staff():
     async def predicate(interaction: discord.Interaction):
         staff_role = discord.utils.get(interaction.guild.roles, name=STAFF_ROLE)
         if staff_role and staff_role in interaction.user.roles:
             return True
-        await interaction.response.send_message("❌ You need the Staff role!", ephemeral=True)
+        await interaction.response.send_message("❌ Staff only!", ephemeral=True)
         return False
     return app_commands.check(predicate)
 
@@ -26,30 +24,29 @@ class TicketView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
     
-    @discord.ui.button(label="Request Close", style=discord.ButtonStyle.red, custom_id="req_close_v10", emoji="🔒")
+    @discord.ui.button(label="Request Close", style=discord.ButtonStyle.red, custom_id="req_close_v12")
     async def request_close_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
         creator_name = ""
         if interaction.channel.topic and "by " in interaction.channel.topic:
-            topic_part = interaction.channel.topic.split("by ")[1]
-            creator_name = topic_part.split(" |")[0].strip().lower()
+            creator_name = interaction.channel.topic.split("by ")[1].split(" |")[0].strip().lower()
         else:
             creator_name = interaction.channel.name.replace("ticket-", "").replace("claimed-", "").lower()
         
         if interaction.user.name.lower() != creator_name:
-            await interaction.response.send_message("❌ Only the ticket creator can request closure!", ephemeral=True)
+            await interaction.response.send_message("❌ Only ticket creator can request close!", ephemeral=True)
             return
         
         staff_role = discord.utils.get(interaction.guild.roles, name=STAFF_ROLE)
         if staff_role:
-            await interaction.response.send_message(f"🔒 {staff_role.mention}\n**{interaction.user.mention}** has requested to close this ticket!")
+            await interaction.response.send_message(f"🔒 {staff_role.mention}\n**{interaction.user.mention}** requested to close this ticket!")
         else:
             await interaction.response.send_message("✅ Close requested!", ephemeral=True)
     
-    @discord.ui.button(label="Close Ticket", style=discord.ButtonStyle.red, custom_id="close_v10", emoji="⛔")
+    @discord.ui.button(label="Close Ticket", style=discord.ButtonStyle.red, custom_id="close_v12")
     async def close_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
         staff_role = discord.utils.get(interaction.guild.roles, name=STAFF_ROLE)
         if not staff_role or staff_role not in interaction.user.roles:
-            await interaction.response.send_message("❌ Only staff can close tickets!", ephemeral=True)
+            await interaction.response.send_message("❌ Staff only!", ephemeral=True)
             return
         
         await interaction.response.send_message("🔒 Closing in 5 seconds...")
@@ -59,7 +56,6 @@ class TicketView(discord.ui.View):
 class CategorySelect(discord.ui.Select):
     def __init__(self):
         options = [
-            discord.SelectOption(label="🎫 Select a category...", description="Choose from below", emoji="📋", default=True),
             discord.SelectOption(label="🏠 Base Buying", description="Purchase a base", emoji="🏠"),
             discord.SelectOption(label="🕳️ Bedrock Hole", description="Buy a bedrock hole", emoji="🕳️"),
             discord.SelectOption(label="🔄 Spawner Trade", description="Buy/sell spawners", emoji="🔄"),
@@ -67,17 +63,11 @@ class CategorySelect(discord.ui.Select):
             discord.SelectOption(label="❓ Support", description="General help", emoji="❓"),
             discord.SelectOption(label="⚠️ Scam Report", description="Report a scam", emoji="⚠️"),
         ]
-        super().__init__(placeholder="Choose a category...", options=options, custom_id="cat_select_v10")
+        super().__init__(placeholder="🎫 Select ticket category...", options=options, custom_id="cat_select_v12")
     
     async def callback(self, interaction: discord.Interaction):
-        # If default option selected, do nothing
-        if self.values[0] == "🎫 Select a category...":
-            await interaction.response.defer()
-            return
-        
         await interaction.response.defer(ephemeral=True)
         
-        # Check existing tickets
         for ch in interaction.guild.channels:
             if ch.name.endswith(f"-{interaction.user.name.lower()}") and (
                 ch.name.startswith("ticket-") or ch.name.startswith("claimed-")
@@ -85,7 +75,6 @@ class CategorySelect(discord.ui.Select):
                 await interaction.followup.send(f"❌ You already have a ticket: {ch.mention}", ephemeral=True)
                 return
         
-        # Map labels to full names
         category_map = {
             "🏠 Base Buying": "Base Buying",
             "🕳️ Bedrock Hole": "Bedrock Hole Buying",
@@ -99,98 +88,53 @@ class CategorySelect(discord.ui.Select):
         
         configs = {
             "Base Buying": {
-                "discord_category": "🏠 Base Buying",
-                "ping_roles": [STAFF_ROLE, BASE_BUYING_ROLE],
-                "allowed_roles": [STAFF_ROLE, BASE_BUYING_ROLE],
-                "color": 0x2ecc71,
-                "emoji": "🏠",
-                "questions": [
-                    "**What type of base are you looking for?**",
-                    "**What is your budget?**",
-                    "**Any specific requirements?**"
-                ]
+                "cat": "🏠 Base Buying", "ping": [STAFF_ROLE, BASE_BUYING_ROLE], "allow": [STAFF_ROLE, BASE_BUYING_ROLE],
+                "color": 0x2ecc71, "emoji": "🏠",
+                "q": ["**What type of base?**", "**Budget?**", "**Requirements?**"]
             },
             "Bedrock Hole Buying": {
-                "discord_category": "🕳️ Bedrock Holes",
-                "ping_roles": [STAFF_ROLE, BEDROCK_ROLE],
-                "allowed_roles": [STAFF_ROLE, BEDROCK_ROLE],
-                "color": 0x95a5a6,
-                "emoji": "🕳️",
-                "questions": [
-                    "**What size bedrock hole?**",
-                    "**What is your budget?**",
-                    "**Location requirements?**"
-                ]
+                "cat": "🕳️ Bedrock Holes", "ping": [STAFF_ROLE, BEDROCK_ROLE], "allow": [STAFF_ROLE, BEDROCK_ROLE],
+                "color": 0x95a5a6, "emoji": "🕳️",
+                "q": ["**What size hole?**", "**Budget?**", "**Location?**"]
             },
             "Spawner Trading": {
-                "discord_category": "🔄 Spawner Trading",
-                "ping_roles": [STAFF_ROLE, SPAWNER_ROLE],
-                "allowed_roles": [STAFF_ROLE, SPAWNER_ROLE],
-                "color": 0xf1c40f,
-                "emoji": "🔄",
-                "questions": [
-                    "**Buying or selling?**",
-                    "**What type of spawners?**",
-                    "**How many and what price?**"
-                ]
+                "cat": "🔄 Spawner Trading", "ping": [STAFF_ROLE, SPAWNER_ROLE], "allow": [STAFF_ROLE, SPAWNER_ROLE],
+                "color": 0xf1c40f, "emoji": "🔄",
+                "q": ["**Buying or selling?**", "**Type?**", "**Quantity/Price?**"]
             },
             "Building": {
-                "discord_category": "🏗️ Building",
-                "ping_roles": [BUILDING_ROLE],
-                "allowed_roles": [STAFF_ROLE, BUILDING_ROLE],
-                "color": 0x9b59b6,
-                "emoji": "🏗️",
-                "questions": [
-                    "**What do you need built?**",
-                    "**What is your budget?**",
-                    "**Do you have a deadline?**"
-                ]
+                "cat": "🏗️ Building", "ping": [BUILDING_ROLE], "allow": [STAFF_ROLE, BUILDING_ROLE],
+                "color": 0x9b59b6, "emoji": "🏗️",
+                "q": ["**What to build?**", "**Budget?**", "**Deadline?**"]
             },
             "General Support": {
-                "discord_category": "❓ General Support",
-                "ping_roles": [STAFF_ROLE],
-                "allowed_roles": [STAFF_ROLE],
-                "color": 0x3498db,
-                "emoji": "❓",
-                "questions": [
-                    "**What do you need help with?**",
-                    "**Please provide as much detail as possible**"
-                ]
+                "cat": "❓ General Support", "ping": [STAFF_ROLE], "allow": [STAFF_ROLE],
+                "color": 0x3498db, "emoji": "❓",
+                "q": ["**What do you need help with?**", "**Provide details**"]
             },
             "Scam Report": {
-                "discord_category": "⚠️ Scam Reports",
-                "ping_roles": [STAFF_ROLE],
-                "allowed_roles": [STAFF_ROLE],
-                "color": 0xe74c3c,
-                "emoji": "⚠️",
-                "questions": [
-                    "**Who scammed you?** (Username + ID)",
-                    "**What were you trading/buying?**",
-                    "**Do you have proof?** (Screenshots)"
-                ]
+                "cat": "⚠️ Scam Reports", "ping": [STAFF_ROLE], "allow": [STAFF_ROLE],
+                "color": 0xe74c3c, "emoji": "⚠️",
+                "q": ["**Who scammed you?**", "**What happened?**", "**Proof?**"]
             }
         }
         
         cfg = configs[category]
         
-        # Get or create Discord category
-        dc_cat = discord.utils.get(interaction.guild.categories, name=cfg["discord_category"])
+        dc_cat = discord.utils.get(interaction.guild.categories, name=cfg["cat"])
         if not dc_cat:
-            dc_cat = await interaction.guild.create_category(cfg["discord_category"])
+            dc_cat = await interaction.guild.create_category(cfg["cat"])
             await dc_cat.set_permissions(interaction.guild.default_role, read_messages=False)
         
-        # Permissions
         overwrites = {
             interaction.guild.default_role: discord.PermissionOverwrite(read_messages=False),
             interaction.user: discord.PermissionOverwrite(read_messages=True, send_messages=True, read_message_history=True, attach_files=True)
         }
+        for rn in cfg["allow"]:
+            r = discord.utils.get(interaction.guild.roles, name=rn)
+            if r:
+                overwrites[r] = discord.PermissionOverwrite(read_messages=True, send_messages=True, read_message_history=True, attach_files=True)
         
-        for role_name in cfg["allowed_roles"]:
-            role = discord.utils.get(interaction.guild.roles, name=role_name)
-            if role:
-                overwrites[role] = discord.PermissionOverwrite(read_messages=True, send_messages=True, read_message_history=True, attach_files=True)
-        
-        # Create channel
         channel = await interaction.guild.create_text_channel(
             name=f"ticket-{interaction.user.name.lower()}",
             category=dc_cat,
@@ -198,179 +142,108 @@ class CategorySelect(discord.ui.Select):
             topic=f"🎫 {category} | Created by {interaction.user.name}"
         )
         
-        # Beautiful embed
         embed = discord.Embed(
             title=f"{cfg['emoji']} {category} Ticket",
-            description=f"### Welcome {interaction.user.mention}!\n\n"
-                       f"Thank you for creating a ticket. Please answer the questions below.\n\n"
-                       f"━━━━━━━━━━━━━━━━━━━━━━━",
+            description=f"### Welcome {interaction.user.mention}!\n\nAnswer the questions below:\n\n━━━━━━━━━━━━━━━━━━",
             color=cfg["color"],
             timestamp=datetime.utcnow()
         )
-        
-        for i, q in enumerate(cfg["questions"], 1):
-            embed.add_field(name=f"📋 Question {i}", value=q, inline=False)
-        
-        embed.add_field(name="\u200b", value="━━━━━━━━━━━━━━━━━━━━━━━", inline=False)
+        for i, q in enumerate(cfg["q"], 1):
+            embed.add_field(name=f"📋 Q{i}", value=q, inline=False)
         embed.add_field(name="👤 Created By", value=interaction.user.mention, inline=True)
         embed.add_field(name="📂 Category", value=category, inline=True)
-        embed.set_footer(text=f"Ticket ID: {channel.id}")
-        
+        embed.set_footer(text=f"ID: {channel.id}")
         if interaction.guild.icon:
             embed.set_thumbnail(url=interaction.guild.icon.url)
         
-        # Send embed with buttons
         view = TicketView()
         await channel.send(embed=embed, view=view)
         
-        # PING ROLES - Normal message so pings work
-        ping_message = ""
-        for role_name in cfg["ping_roles"]:
-            role = discord.utils.get(interaction.guild.roles, name=role_name)
-            if role:
-                ping_message += f"{role.mention} "
+        ping_msg = ""
+        for rn in cfg["ping"]:
+            r = discord.utils.get(interaction.guild.roles, name=rn)
+            if r:
+                ping_msg += f"{r.mention} "
+        if ping_msg:
+            await channel.send(f"{ping_msg}\n📩 New {category} ticket from {interaction.user.mention}!")
         
-        if ping_message:
-            await channel.send(f"{ping_message}\n📩 **New {category} ticket** from {interaction.user.mention}!")
-        
-        await interaction.followup.send(f"✅ Ticket created: {channel.mention}", ephemeral=True)
+        await interaction.followup.send(f"✅ {channel.mention}", ephemeral=True)
 
 class Tickets(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
     
-    @app_commands.command(name="rename", description="✏️ Rename this ticket channel (Staff only)")
-    @app_commands.describe(new_name="New name for the channel")
+    @app_commands.command(name="ticketpanel", description="Create ticket panel (Admin)")
+    @app_commands.default_permissions(administrator=True)
+    async def ticketpanel(self, interaction: discord.Interaction):
+        async for msg in interaction.channel.history(limit=20):
+            if msg.author == self.bot.user:
+                try: await msg.delete()
+                except: pass
+        
+        embed = discord.Embed(title="🎫 Support Tickets", description="### Select a category below!", color=0x2b2d31)
+        embed.add_field(name="Categories", value="🏠 Base Buying\n🕳️ Bedrock Hole\n🔄 Spawner Trade\n🏗️ Building\n❓ Support\n⚠️ Scam Report")
+        if interaction.guild.icon: embed.set_thumbnail(url=interaction.guild.icon.url)
+        
+        view = discord.ui.View(timeout=None)
+        view.add_item(CategorySelect())
+        await interaction.response.send_message(embed=embed, view=view)
+    
+    @app_commands.command(name="rename", description="Rename ticket channel (Staff)")
+    @app_commands.describe(new_name="New channel name")
     @is_staff()
     async def rename(self, interaction: discord.Interaction, new_name: str):
         if not (interaction.channel.name.startswith("ticket-") or interaction.channel.name.startswith("claimed-")):
-            await interaction.response.send_message("❌ Use in a ticket channel!", ephemeral=True)
+            await interaction.response.send_message("❌ Ticket channels only!", ephemeral=True)
             return
-        
-        clean_name = new_name.lower().replace(" ", "-")[:50]
-        old_name = interaction.channel.name
-        
-        if old_name.startswith("claimed-"):
-            parts = old_name.split("-", 2)
-            prefix = f"claimed-{parts[1]}-" if len(parts) >= 2 else "claimed-"
-            new_channel_name = f"{prefix}{clean_name}"
-        else:
-            new_channel_name = f"ticket-{clean_name}"
-        
+        clean = new_name.lower().replace(" ", "-")[:50]
         try:
-            await interaction.channel.edit(name=new_channel_name)
-            await interaction.response.send_message(f"✅ Renamed to **{new_channel_name}**")
+            await interaction.channel.edit(name=f"ticket-{clean}")
+            await interaction.response.send_message(f"✅ Renamed!")
         except Exception as e:
-            await interaction.response.send_message(f"❌ Error: {e}", ephemeral=True)
+            await interaction.response.send_message(f"❌ {e}", ephemeral=True)
     
-    @app_commands.command(name="add", description="➕ Add a user to this ticket")
+    @app_commands.command(name="add", description="Add user to ticket")
     @app_commands.describe(member="User to add")
     @is_staff()
     async def add(self, interaction: discord.Interaction, member: discord.Member):
-        if not (interaction.channel.name.startswith("ticket-") or interaction.channel.name.startswith("claimed-")):
-            await interaction.response.send_message("❌ Use in a ticket channel!", ephemeral=True)
-            return
         await interaction.channel.set_permissions(member, read_messages=True, send_messages=True)
-        await interaction.response.send_message(f"✅ {member.mention} added by {interaction.user.mention}")
+        await interaction.response.send_message(f"✅ {member.mention} added")
     
-    @app_commands.command(name="remove", description="➖ Remove a user from this ticket")
+    @app_commands.command(name="remove", description="Remove user from ticket")
     @app_commands.describe(member="User to remove")
     @is_staff()
     async def remove(self, interaction: discord.Interaction, member: discord.Member):
-        if not (interaction.channel.name.startswith("ticket-") or interaction.channel.name.startswith("claimed-")):
-            await interaction.response.send_message("❌ Use in a ticket channel!", ephemeral=True)
-            return
         if member == interaction.user:
-            await interaction.response.send_message("❌ Cannot remove yourself!", ephemeral=True)
+            await interaction.response.send_message("❌ Can't remove yourself!", ephemeral=True)
             return
         await interaction.channel.set_permissions(member, read_messages=False, send_messages=False)
-        await interaction.response.send_message(f"✅ {member.mention} removed by {interaction.user.mention}")
+        await interaction.response.send_message(f"✅ {member.mention} removed")
     
-    @app_commands.command(name="close", description="🔒 Close this ticket")
+    @app_commands.command(name="close", description="Close ticket")
     async def close(self, interaction: discord.Interaction):
         if not (interaction.channel.name.startswith("ticket-") or interaction.channel.name.startswith("claimed-")):
-            await interaction.response.send_message("❌ Use in a ticket channel!", ephemeral=True)
+            await interaction.response.send_message("❌ Ticket channels only!", ephemeral=True)
             return
         
         has_perm = False
-        all_roles = [STAFF_ROLE, BASE_BUYING_ROLE, BEDROCK_ROLE, SPAWNER_ROLE, BUILDING_ROLE]
-        for rn in all_roles:
+        for rn in [STAFF_ROLE, BASE_BUYING_ROLE, BEDROCK_ROLE, SPAWNER_ROLE, BUILDING_ROLE]:
             r = discord.utils.get(interaction.guild.roles, name=rn)
             if r and r in interaction.user.roles:
                 has_perm = True
                 break
         
-        creator_name = interaction.channel.name.replace("ticket-", "").replace("claimed-", "")
-        if interaction.user.name.lower() == creator_name.lower():
+        creator = interaction.channel.name.replace("ticket-", "").replace("claimed-", "")
+        if interaction.user.name.lower() == creator.lower():
             has_perm = True
         
         if not has_perm:
             await interaction.response.send_message("❌ No permission!", ephemeral=True)
             return
         
-        transcript = io.BytesIO()
-        content = f"Ticket: {interaction.channel.name}\nClosed by: {interaction.user}\nDate: {datetime.utcnow()}\n" + "=" * 50 + "\n\n"
-        
-        async for msg in interaction.channel.history(limit=None, oldest_first=True):
-            content += f"[{msg.created_at}] {msg.author}: {msg.content}\n"
-            if msg.attachments:
-                for att in msg.attachments:
-                    content += f"[Attachment: {att.url}]\n"
-            content += "\n"
-        
-        transcript.write(content.encode())
-        transcript.seek(0)
-        
-        creator_name = interaction.channel.name.replace("ticket-", "").replace("claimed-", "")
-        for member in interaction.guild.members:
-            if member.name.lower() == creator_name.lower():
-                try:
-                    await member.send(f"📝 Transcript from {interaction.guild.name}", file=discord.File(transcript, filename="transcript.txt"))
-                except:
-                    pass
-                break
-        
-        await interaction.response.send_message("🔒 Closing in 5 seconds...")
+        await interaction.response.send_message("🔒 Closing in 5s...")
         await asyncio.sleep(5)
         await interaction.channel.delete()
-    
-    @app_commands.command(name="ticketpanel", description="📋 Create the ticket panel (Admin only)")
-    @app_commands.default_permissions(administrator=True)
-    async def ticketpanel(self, interaction: discord.Interaction):
-        async for msg in interaction.channel.history(limit=20):
-            if msg.author == self.bot.user:
-                try:
-                    await msg.delete()
-                except:
-                    pass
-        
-        embed = discord.Embed(
-            title="🎫 Support Tickets",
-            description="### Need assistance? Select a category below!\n\n"
-                       "Our team will assist you as soon as possible.",
-            color=0x2b2d31
-        )
-        
-        embed.add_field(
-            name="📋 Categories",
-            value="🏠 **Base Buying** — Purchase a base\n"
-                  "🕳️ **Bedrock Hole** — Buy bedrock holes\n"
-                  "🔄 **Spawner Trade** — Buy/sell spawners\n"
-                  "🏗️ **Building** — Building services\n"
-                  "❓ **Support** — General help\n"
-                  "⚠️ **Scam Report** — Report scams",
-            inline=False
-        )
-        
-        embed.set_footer(text="Select a category from the dropdown below ✨")
-        
-        if interaction.guild.icon:
-            embed.set_thumbnail(url=interaction.guild.icon.url)
-        
-        view = discord.ui.View(timeout=None)
-        view.add_item(CategorySelect())
-        
-        await interaction.response.send_message(embed=embed, view=view)
 
 async def setup(bot):
     await bot.add_cog(Tickets(bot))
