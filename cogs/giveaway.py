@@ -21,7 +21,7 @@ STAFF_ROLE = "Staff"
 
 class GiveawayData:
     def __init__(self):
-        self.active_giveaways = {}  # {message_id: Giveaway}
+        self.active_giveaways = {}
         self.load_data()
     
     def load_data(self):
@@ -242,6 +242,12 @@ class WinnerClaimView(discord.ui.View):
         view = TicketView()
         await ticket.send(embed=embed, view=view)
 
+        # ── Proof link to original giveaway message ──
+        giveaway_link = f"https://discord.com/channels/{guild.id}/{self.giveaway_channel_id}/{self.giveaway_message_id}"
+        await ticket.send(
+            f"🔗 **Click here to see proof / original giveaway:** [Giveaway Message]({giveaway_link})"
+        )
+
         # Ping staff
         if staff_role:
             await ticket.send(
@@ -257,6 +263,7 @@ class WinnerClaimView(discord.ui.View):
         )
 
     async def on_timeout(self):
+        """Fires after claim_time_seconds — removes the Claim Prize button."""
         if not self.message:
             return
 
@@ -267,6 +274,7 @@ class WinnerClaimView(discord.ui.View):
                 "\n\n⏰ Claim period has expired."
             )
             embed.color = discord.Color.red()
+            # view=None removes the button from the message
             await self.message.edit(embed=embed, view=None)
         except Exception as e:
             print(f"Claim timeout error: {e}")
