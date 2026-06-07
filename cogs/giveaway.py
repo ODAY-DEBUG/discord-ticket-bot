@@ -130,6 +130,7 @@ class WinnerClaimView(discord.ui.View):
         self.giveaway_channel_id = giveaway_channel_id
         self.giveaway_message_id = giveaway_message_id
         self.claimed_users = set()
+        self.message: discord.Message = None  # stored after sending
         
         # Add claim buttons for each winner
         for winner_id in winners:
@@ -252,17 +253,20 @@ class WinnerClaimView(discord.ui.View):
         )
     
     async def on_timeout(self):
-        # Disable all buttons after timeout
-        for item in self.children:
-            item.disabled = True
-        
-        # Try to edit the original message to remove buttons
-        try:
-            # Find the original message (this is tricky, we'd need to store the message reference)
-            # For now, we'll just log it
-            print(f"Claim view timed out for giveaway {self.giveaway_message_id}")
-        except:
-            pass
+        if self.message:
+            try:
+                embed = self.message.embeds[0] if self.message.embeds else None
+                if embed:
+                    embed.description = (embed.description or "").replace(
+                        "📝 Click the **Claim Prize** button below within 10 minutes!",
+                        "⏰ Claim period has expired."
+                    )
+                    embed.color = discord.Color.red()
+                    await self.message.edit(embed=embed, view=None)
+                else:
+                    await self.message.edit(view=None)
+            except Exception as e:
+                print(f"Failed to remove claim buttons on timeout: {e}")
 
 
 class GiveawayButton(discord.ui.Button):
@@ -283,6 +287,23 @@ class GiveawayButton(discord.ui.Button):
         if self.giveaway.add_entry(interaction.user.id):
             self.giveaway_data.save_data()
             await interaction.response.send_message("✅ You have entered the giveaway! Good luck! 🎉", ephemeral=True)
+            # Update the entry count on the embed
+            try:
+                msg = await interaction.channel.fetch_message(self.giveaway.message_id)
+                if msg.embeds:
+                    embed = msg.embeds[0]
+                    new_fields = []
+                    for field in embed.fields:
+                        if field.name == "📊 Total Entries":
+                            new_fields.append(discord.EmbedField(name="📊 Total Entries", value=str(len(self.giveaway.entries)), inline=False))
+                        else:
+                            new_fields.append(field)
+                    embed.clear_fields()
+                    for field in new_fields:
+                        embed.add_field(name=field.name, value=field.value, inline=field.inline)
+                    await msg.edit(embed=embed)
+            except Exception as e:
+                print(f"Failed to update entry count: {e}")
         else:
             await interaction.response.send_message("❌ You have already entered this giveaway!", ephemeral=True)
 
@@ -355,33 +376,33 @@ class Giveaways(commands.Cog):
                 inline=False
             )
             
-            # Create claim view for winners
-            claim_view = WinnerClaimView(
-                winners, giveaway.prize, 
-                giveaway.channel_id, message_id
-            )
+            # Update original giveaway message to show it ended (no claim buttons here)
+            await original_msg.edit(embed=results_embed, view=None)
             
-            # Add instructions for claiming
-            results_embed.add_field(
-                name="📝 How to Claim",
-                value="Click the **Claim Prize** button below within 10 minutes to open a claim ticket!",
-                inline=False
-            )
-            
-            await original_msg.edit(embed=results_embed, view=claim_view)
-            
-            # Also send a separate announcement
+            # Send winner announcement with claim buttons attached
             announcement_embed = discord.Embed(
                 title="🎉 Giveaway Winners Announced! 🎉",
                 description=f"**Giveaway:** {giveaway.title}\n"
                            f"**Prize:** {giveaway.prize}\n\n"
-                           f"**Winners:** {', '.join(winner_mentions)}",
+                           f"**Winners:** {', '.join(winner_mentions)}\n\n"
+                           f"📝 Click the **Claim Prize** button below within 10 minutes!",
                 color=0x00ff00,
                 timestamp=datetime.now(timezone.utc)
             )
             announcement_embed.set_footer(text="Winners have 10 minutes to claim their prize!")
-            
-            await channel.send(embed=announcement_embed)
+
+            # Claim view goes on the announcement message
+            claim_view = WinnerClaimView(
+                winners, giveaway.prize,
+                giveaway.channel_id, message_id
+            )
+
+            announcement_msg = await channel.send(
+                content=" ".join(winner_mentions),
+                embed=announcement_embed,
+                view=claim_view
+            )
+            claim_view.message = announcement_msg  # so on_timeout can edit it
             
             # DM winners
             for winner_id in winners:
