@@ -126,151 +126,147 @@ class Giveaway:
 # ---------------------------------------------------------------------------
 
 class WinnerClaimView(discord.ui.View):
-    def __init__(self, winners: List[int], prize: str, giveaway_channel_id: int, giveaway_message_id: int, claim_time_seconds: int = 600):
+    def __init__(
+        self,
+        winners: List[int],
+        prize: str,
+        giveaway_channel_id: int,
+        giveaway_message_id: int,
+        claim_time_seconds: int = 600
+    ):
         super().__init__(timeout=claim_time_seconds)
+
         self.winners = winners
         self.prize = prize
         self.giveaway_channel_id = giveaway_channel_id
         self.giveaway_message_id = giveaway_message_id
-        self.claim_time_seconds = claim_time_seconds
         self.claimed_users = set()
-        self.message: discord.Message = None  # stored after sending
-        
-        # Add claim buttons for each winner
-        for winner_id in winners:
-            button = discord.ui.Button(
-                label=f"Claim Prize - {prize[:30]}",
-                style=discord.ButtonStyle.green,
-                custom_id=f"claim_{winner_id}_{giveaway_message_id}"
+        self.message = None
+
+    @discord.ui.button(
+        label="🎁 Claim Prize",
+        style=discord.ButtonStyle.green,
+        custom_id="claim_prize"
+    )
+    async def claim_button(
+        self,
+        interaction: discord.Interaction,
+        button: discord.ui.Button
+    ):
+        if interaction.user.id not in self.winners:
+            await interaction.response.send_message(
+                "❌ You are not one of the giveaway winners!",
+                ephemeral=True
             )
-            button.callback = self.create_callback(winner_id)
-            self.add_item(button)
-    
-    def create_callback(self, winner_id: int):
-        async def callback(interaction: discord.Interaction):
-            if interaction.user.id != winner_id:
-                await interaction.response.send_message("❌ This claim button is not for you!", ephemeral=True)
-                return
-            
-            if winner_id in self.claimed_users:
-                await interaction.response.send_message("❌ You have already claimed your prize!", ephemeral=True)
-                return
-            
-            # Create claim ticket
-            await self.create_claim_ticket(interaction, winner_id)
-            
-        return callback
-    
-    async def create_claim_ticket(self, interaction: discord.Interaction, winner_id: int):
+            return
+
+        if interaction.user.id in self.claimed_users:
+            await interaction.response.send_message(
+                "❌ You already claimed your prize!",
+                ephemeral=True
+            )
+            return
+
+        await self.create_claim_ticket(
+            interaction,
+            interaction.user.id
+        )
+
+    async def create_claim_ticket(self, interaction, winner_id):
         guild = interaction.guild
-        
-        # Check for existing open ticket
+
         uname = interaction.user.name.lower()
+
         for channel in guild.text_channels:
-            if (channel.name.startswith("ticket-") or channel.name.startswith("claimed-")) and \
-               channel.name.endswith(f"-{uname}"):
+            if channel.name == f"claim-{uname}":
                 await interaction.response.send_message(
-                    f"❌ You already have an open ticket: {channel.mention}\nPlease close that ticket first.",
+                    f"❌ You already have an open claim ticket: {channel.mention}",
                     ephemeral=True
                 )
                 return
-        
-        # Get or create claim tickets category
-        claim_category = discord.utils.get(guild.categories, name="Claim Tickets")
+
+        claim_category = discord.utils.get(
+            guild.categories,
+            name="Claim Tickets"
+        )
+
         if not claim_category:
-            claim_category = await guild.create_category("Claim Tickets")
-            await claim_category.set_permissions(guild.default_role, read_messages=False)
-        
-        # Setup permissions
+            claim_category = await guild.create_category(
+                "Claim Tickets"
+            )
+
         overwrites = {
-            guild.default_role: discord.PermissionOverwrite(read_messages=False),
-            interaction.user: discord.PermissionOverwrite(
-                read_messages=True, send_messages=True,
-                read_message_history=True, attach_files=True
+            guild.default_role: discord.PermissionOverwrite(
+                read_messages=False
             ),
-        }
-        
-        # Add Staff role
-        staff_role = discord.utils.get(guild.roles, name=STAFF_ROLE)
-        if staff_role:
-            overwrites[staff_role] = discord.PermissionOverwrite(
-                read_messages=True, send_messages=True,
+            interaction.user: discord.PermissionOverwrite(
+                read_messages=True,
+                send_messages=True,
                 read_message_history=True
             )
-        
-        # Create ticket channel
-        channel = await guild.create_text_channel(
+        }
+
+        staff_role = discord.utils.get(
+            guild.roles,
+            name=STAFF_ROLE
+        )
+
+        if staff_role:
+            overwrites[staff_role] = discord.PermissionOverwrite(
+                read_messages=True,
+                send_messages=True
+            )
+
+        ticket = await guild.create_text_channel(
             name=f"claim-{uname}",
             category=claim_category,
-            overwrites=overwrites,
-            topic=f"Prize Claim for {interaction.user.name} | Giveaway Prize: {self.prize}"
+            overwrites=overwrites
         )
-        
-        # Create embed
+
         embed = discord.Embed(
-            title="🎉 Prize Claim Ticket",
-            description=f"**Winner:** {interaction.user.mention}\n"
-                       f"**Prize:** {self.prize}\n\n"
-                       "Please wait for a staff member to assist you with your prize.",
-            color=0x00ff00,
-            timestamp=datetime.now(timezone.utc)
+            title="🎉 Prize Claim",
+            description=(
+                f"Winner: {interaction.user.mention}\n"
+                f"Prize: **{self.prize}**"
+            ),
+            color=discord.Color.green()
         )
-        
-        # Get the original giveaway message link
-        giveaway_channel = guild.get_channel(self.giveaway_channel_id)
-        if giveaway_channel:
-            giveaway_link = f"https://discord.com/channels/{guild.id}/{self.giveaway_channel_id}/{self.giveaway_message_id}"
-            embed.add_field(name="Giveaway Link", value=f"[Click here]({giveaway_link})", inline=False)
-        
-        embed.set_footer(text=f"User ID: {interaction.user.id}")
-        
-        # Create close button for ticket
-        class CloseTicketButton(discord.ui.View):
-            def __init__(self):
-                super().__init__(timeout=None)
-            
-            @discord.ui.button(label="Close Ticket", style=discord.ButtonStyle.red, custom_id="close_claim_ticket")
-            async def close_button(self, close_interaction: discord.Interaction, button: discord.ui.Button):
-                if not (staff_role and staff_role in close_interaction.user.roles) and \
-                   not close_interaction.user.guild_permissions.administrator:
-                    await close_interaction.response.send_message("❌ Staff only!", ephemeral=True)
-                    return
-                
-                await close_interaction.response.send_message("🔒 Closing ticket in 5 seconds...")
-                await asyncio.sleep(5)
-                try:
-                    await close_interaction.channel.delete()
-                except:
-                    pass
-        
-        await channel.send(embed=embed, view=CloseTicketButton())
-        
-        # Notify staff
+
+        await ticket.send(embed=embed)
+
         if staff_role:
-            await channel.send(f"{staff_role.mention} New prize claim ticket from {interaction.user.mention}!")
-        
+            await ticket.send(
+                f"{staff_role.mention} New giveaway claim."
+            )
+
         self.claimed_users.add(winner_id)
+
         await interaction.response.send_message(
-            f"✅ Claim ticket created: {channel.mention}\n"
-            f"Please wait for staff assistance. The ticket will be used to distribute your prize.",
+            f"✅ Claim ticket created: {ticket.mention}",
             ephemeral=True
         )
-    
+
     async def on_timeout(self):
-        if self.message:
-            try:
-                embed = self.message.embeds[0] if self.message.embeds else None
-                if embed:
-                    embed.description = (embed.description or "").replace(
-                        f"📝 Click the **Claim Prize** button below within {self.claim_time_seconds // 60}m {self.claim_time_seconds % 60}s to claim!",
-                        "⏰ Claim period has expired."
-                    )
-                    embed.color = discord.Color.red()
-                    await self.message.edit(embed=embed, view=None)
-                else:
-                    await self.message.edit(view=None)
-            except Exception as e:
-                print(f"Failed to remove claim buttons on timeout: {e}")
+        if not self.message:
+            return
+
+        try:
+            embed = self.message.embeds[0]
+
+            embed.description = (
+                embed.description +
+                "\n\n⏰ Claim period has expired."
+            )
+
+            embed.color = discord.Color.red()
+
+            await self.message.edit(
+                embed=embed,
+                view=None
+            )
+
+        except Exception as e:
+            print(f"Claim timeout error: {e}")
 
 
 class GiveawayButton(discord.ui.Button):
@@ -390,11 +386,13 @@ class Giveaways(commands.Cog):
                 description=f"**Giveaway:** {giveaway.title}\n"
                            f"**Prize:** {giveaway.prize}\n\n"
                            f"**Winners:** {', '.join(winner_mentions)}\n\n"
-                           f"📝 Click the **Claim Prize** button below within {giveaway.claim_time_seconds // 60}m {giveaway.claim_time_seconds % 60}s to claim!",
+                           f"📝 Click the **Claim Prize** button below to claim your prize!",
                 color=0x00ff00,
                 timestamp=datetime.now(timezone.utc)
             )
-            announcement_embed.set_footer(text=f"Winners have {giveaway.claim_time_seconds // 60}m {giveaway.claim_time_seconds % 60}s to claim their prize!")
+            announcement_embed.set_footer(
+                text="Prize claim is open."
+            )
 
             # Claim view goes on the announcement message
             claim_view = WinnerClaimView(
@@ -417,8 +415,8 @@ class Giveaways(commands.Cog):
                     dm_embed = discord.Embed(
                         title="🎉 Congratulations! You won a giveaway! 🎉",
                         description=f"You won **{giveaway.prize}** in **{giveaway.title}**!\n\n"
-                                   f"Please go to {channel.mention} and click the **Claim Prize** button "
-                                   f"within 10 minutes to claim your prize.",
+                                   f"Please go to {channel.mention} and click the "
+                                   f"**Claim Prize** button to claim your prize.",
                         color=0x00ff00
                     )
                     await user.send(embed=dm_embed)
