@@ -60,7 +60,7 @@ class GiveawayData:
 class Giveaway:
     def __init__(self, channel_id: int, end_time: datetime, prize: str, 
                  winners_count: int, title: str, description: str,
-                 host_id: int, message_id: int = None):
+                 host_id: int, message_id: int = None, claim_time_seconds: int = 600):
         self.channel_id = channel_id
         self.end_time = end_time
         self.prize = prize
@@ -69,6 +69,7 @@ class Giveaway:
         self.description = description
         self.host_id = host_id
         self.message_id = message_id
+        self.claim_time_seconds = claim_time_seconds
         self.entries = []  # List of user IDs
         self.ended = False
     
@@ -83,7 +84,8 @@ class Giveaway:
             'host_id': self.host_id,
             'message_id': self.message_id,
             'entries': self.entries,
-            'ended': self.ended
+            'ended': self.ended,
+            'claim_time_seconds': self.claim_time_seconds
         }
     
     @classmethod
@@ -100,6 +102,7 @@ class Giveaway:
         )
         giveaway.entries = data.get('entries', [])
         giveaway.ended = data.get('ended', False)
+        giveaway.claim_time_seconds = data.get('claim_time_seconds', 600)
         return giveaway
     
     def add_entry(self, user_id: int):
@@ -123,12 +126,13 @@ class Giveaway:
 # ---------------------------------------------------------------------------
 
 class WinnerClaimView(discord.ui.View):
-    def __init__(self, winners: List[int], prize: str, giveaway_channel_id: int, giveaway_message_id: int):
-        super().__init__(timeout=600)  # 10 minutes timeout
+    def __init__(self, winners: List[int], prize: str, giveaway_channel_id: int, giveaway_message_id: int, claim_time_seconds: int = 600):
+        super().__init__(timeout=claim_time_seconds)
         self.winners = winners
         self.prize = prize
         self.giveaway_channel_id = giveaway_channel_id
         self.giveaway_message_id = giveaway_message_id
+        self.claim_time_seconds = claim_time_seconds
         self.claimed_users = set()
         self.message: discord.Message = None  # stored after sending
         
@@ -258,7 +262,7 @@ class WinnerClaimView(discord.ui.View):
                 embed = self.message.embeds[0] if self.message.embeds else None
                 if embed:
                     embed.description = (embed.description or "").replace(
-                        "📝 Click the **Claim Prize** button below within 10 minutes!",
+                        f"📝 Click the **Claim Prize** button below within {self.claim_time_seconds // 60}m {self.claim_time_seconds % 60}s to claim!",
                         "⏰ Claim period has expired."
                     )
                     embed.color = discord.Color.red()
@@ -386,16 +390,17 @@ class Giveaways(commands.Cog):
                 description=f"**Giveaway:** {giveaway.title}\n"
                            f"**Prize:** {giveaway.prize}\n\n"
                            f"**Winners:** {', '.join(winner_mentions)}\n\n"
-                           f"📝 Click the **Claim Prize** button below within 10 minutes!",
+                           f"📝 Click the **Claim Prize** button below within {giveaway.claim_time_seconds // 60}m {giveaway.claim_time_seconds % 60}s to claim!",
                 color=0x00ff00,
                 timestamp=datetime.now(timezone.utc)
             )
-            announcement_embed.set_footer(text="Winners have 10 minutes to claim their prize!")
+            announcement_embed.set_footer(text=f"Winners have {giveaway.claim_time_seconds // 60}m {giveaway.claim_time_seconds % 60}s to claim their prize!")
 
             # Claim view goes on the announcement message
             claim_view = WinnerClaimView(
                 winners, giveaway.prize,
-                giveaway.channel_id, message_id
+                giveaway.channel_id, message_id,
+                giveaway.claim_time_seconds
             )
 
             announcement_msg = await channel.send(
@@ -442,9 +447,10 @@ class Giveaways(commands.Cog):
         description="Description of the giveaway",
         prize="What users can win",
         winners="Number of winners",
-        duration_days="Days until giveaway ends",
-        duration_hours="Hours until giveaway ends",
-        duration_minutes="Minutes until giveaway ends"
+        duration_minutes="Minutes until giveaway ends",
+        duration_seconds="Seconds until giveaway ends",
+        claim_time_minutes="Minutes winners have to claim their prize (default 10)",
+        claim_time_seconds="Extra seconds for claim time (default 0)"
     )
     async def create_giveaway(
         self,
@@ -454,9 +460,10 @@ class Giveaways(commands.Cog):
         description: str,
         prize: str,
         winners: int = 1,
-        duration_days: int = 0,
-        duration_hours: int = 0,
         duration_minutes: int = 0,
+        duration_seconds: int = 0,
+        claim_time_minutes: int = 10,
+        claim_time_seconds: int = 0,
     ):
         # Check permissions
         if not interaction.user.guild_permissions.administrator:
@@ -464,12 +471,12 @@ class Giveaways(commands.Cog):
             return
         
         # Calculate end time
-        total_minutes = (duration_days * 1440) + (duration_hours * 60) + duration_minutes
-        if total_minutes <= 0:
-            await interaction.response.send_message("❌ Please specify a duration greater than 0 minutes!", ephemeral=True)
+        total_seconds = (duration_minutes * 60) + duration_seconds
+        if total_seconds <= 0:
+            await interaction.response.send_message("❌ Please specify a duration greater than 0!", ephemeral=True)
             return
         
-        end_time = datetime.now(timezone.utc) + timedelta(minutes=total_minutes)
+        end_time = datetime.now(timezone.utc) + timedelta(seconds=total_seconds)
         
         # Validate winners count
         if winners < 1 or winners > 25:
@@ -494,6 +501,11 @@ class Giveaways(commands.Cog):
         embed.set_footer(text=f"Hosted by {interaction.user.name}", icon_url=interaction.user.display_avatar.url)
         
         # Create giveaway object
+        total_claim_seconds = (claim_time_minutes * 60) + claim_time_seconds
+        if total_claim_seconds < 30:
+            await interaction.response.send_message("❌ Claim time must be at least 30 seconds!", ephemeral=True)
+            return
+
         giveaway = Giveaway(
             channel_id=channel.id,
             end_time=end_time,
@@ -501,7 +513,8 @@ class Giveaways(commands.Cog):
             winners_count=winners,
             title=title,
             description=description,
-            host_id=interaction.user.id
+            host_id=interaction.user.id,
+            claim_time_seconds=total_claim_seconds
         )
         
         # Send message and save
