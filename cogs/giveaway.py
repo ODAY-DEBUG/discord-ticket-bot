@@ -29,7 +29,6 @@ class GiveawayData:
             try:
                 with open(GIVEAWAYS_FILE, 'r') as f:
                     data = json.load(f)
-                    # Convert saved data back to Giveaway objects
                     for msg_id, giveaway_data in data.items():
                         giveaway = Giveaway.from_dict(giveaway_data)
                         self.active_giveaways[int(msg_id)] = giveaway
@@ -70,7 +69,7 @@ class Giveaway:
         self.host_id = host_id
         self.message_id = message_id
         self.claim_time_seconds = claim_time_seconds
-        self.entries = []  # List of user IDs
+        self.entries = []
         self.ended = False
     
     def to_dict(self):
@@ -114,7 +113,6 @@ class Giveaway:
     def pick_winners(self) -> List[int]:
         if not self.entries:
             return []
-        # Remove duplicates just in case
         unique_entries = list(set(self.entries))
         if len(unique_entries) <= self.winners_count:
             return unique_entries
@@ -174,9 +172,9 @@ class WinnerClaimView(discord.ui.View):
 
     async def create_claim_ticket(self, interaction, winner_id):
         guild = interaction.guild
-
         uname = interaction.user.name.lower()
 
+        # Check for existing claim ticket
         for channel in guild.text_channels:
             if channel.name == f"claim-{uname}":
                 await interaction.response.send_message(
@@ -185,14 +183,12 @@ class WinnerClaimView(discord.ui.View):
                 )
                 return
 
-        claim_category = discord.utils.get(
-            guild.categories,
-            name="Claim Tickets"
-        )
-
+        # ── Same format as tickets.py ──────────────────────────────────
+        claim_category = discord.utils.get(guild.categories, name="Claim Tickets")
         if not claim_category:
-            claim_category = await guild.create_category(
-                "Claim Tickets"
+            claim_category = await guild.create_category("Claim Tickets")
+            await claim_category.set_permissions(
+                guild.default_role, read_messages=False
             )
 
         overwrites = {
@@ -202,41 +198,55 @@ class WinnerClaimView(discord.ui.View):
             interaction.user: discord.PermissionOverwrite(
                 read_messages=True,
                 send_messages=True,
-                read_message_history=True
-            )
+                read_message_history=True,
+                attach_files=True,
+            ),
         }
 
-        staff_role = discord.utils.get(
-            guild.roles,
-            name=STAFF_ROLE
-        )
-
+        staff_role = discord.utils.get(guild.roles, name=STAFF_ROLE)
         if staff_role:
             overwrites[staff_role] = discord.PermissionOverwrite(
                 read_messages=True,
-                send_messages=True
+                send_messages=True,
+                read_message_history=True,
+                attach_files=True,
             )
 
         ticket = await guild.create_text_channel(
             name=f"claim-{uname}",
             category=claim_category,
-            overwrites=overwrites
+            overwrites=overwrites,
+            topic=f"Ticket by {interaction.user.name} | Prize Claim",
         )
 
+        # Embed styled like tickets.py
         embed = discord.Embed(
             title="🎉 Prize Claim",
             description=(
-                f"Winner: {interaction.user.mention}\n"
-                f"Prize: **{self.prize}**"
+                f"### Welcome {interaction.user.mention}!\n\n"
+                f"**Prize:** {self.prize}\n\n"
+                f"Please wait for staff to process your claim.\n\n"
+                f"━━━━━━━━━━━━━━━━━━"
             ),
-            color=discord.Color.green()
+            color=discord.Color.green(),
+            timestamp=datetime.now(timezone.utc),
         )
+        embed.add_field(name="Claimed By", value=interaction.user.mention, inline=True)
+        embed.add_field(name="Category",   value="Prize Claim",            inline=True)
+        embed.set_footer(text=f"Channel ID: {ticket.id}")
+        if guild.icon:
+            embed.set_thumbnail(url=guild.icon.url)
 
-        await ticket.send(embed=embed)
+        # TicketView gives Request Close + Close Ticket buttons
+        from cogs.tickets import TicketView
+        view = TicketView()
+        await ticket.send(embed=embed, view=view)
 
+        # Ping staff
         if staff_role:
             await ticket.send(
-                f"{staff_role.mention} New giveaway claim."
+                f"{staff_role.mention} New giveaway prize claim from "
+                f"{interaction.user.mention}!"
             )
 
         self.claimed_users.add(winner_id)
@@ -252,19 +262,12 @@ class WinnerClaimView(discord.ui.View):
 
         try:
             embed = self.message.embeds[0]
-
             embed.description = (
                 embed.description +
                 "\n\n⏰ Claim period has expired."
             )
-
             embed.color = discord.Color.red()
-
-            await self.message.edit(
-                embed=embed,
-                view=None
-            )
-
+            await self.message.edit(embed=embed, view=None)
         except Exception as e:
             print(f"Claim timeout error: {e}")
 
@@ -287,14 +290,12 @@ class GiveawayButton(discord.ui.Button):
         if self.giveaway.add_entry(interaction.user.id):
             self.giveaway_data.save_data()
             await interaction.response.send_message("✅ You have entered the giveaway! Good luck! 🎉", ephemeral=True)
-            # Update the entry count on the embed
             try:
                 channel = interaction.client.get_channel(self.giveaway.channel_id)
                 if channel:
                     msg = await channel.fetch_message(self.giveaway.message_id)
                     if msg.embeds:
                         embed = msg.embeds[0]
-                        # Store existing fields, replace entry count
                         fields = [(f.name, f.value, f.inline) for f in embed.fields]
                         embed.clear_fields()
                         for name, value, inline in fields:
@@ -330,7 +331,6 @@ class Giveaways(commands.Cog):
     
     @tasks.loop(seconds=30)
     async def check_giveaways(self):
-        """Background task to check and end giveaways"""
         now = datetime.now(timezone.utc)
         ended_giveaways = []
         
@@ -342,7 +342,6 @@ class Giveaways(commands.Cog):
             await self.end_giveaway(msg_id, giveaway)
     
     async def end_giveaway(self, message_id: int, giveaway: Giveaway):
-        """End a giveaway and announce winners"""
         giveaway.ended = True
         
         channel = self.bot.get_channel(giveaway.channel_id)
@@ -358,10 +357,8 @@ class Giveaways(commands.Cog):
             self.giveaway_data.remove_giveaway(message_id)
             return
         
-        # Pick winners
         winners = giveaway.pick_winners()
         
-        # Create results embed
         results_embed = discord.Embed(
             title=f"🎉 {giveaway.title} - GIVEAWAY ENDED 🎉",
             description=f"{giveaway.description}\n\n**Prize:** {giveaway.prize}",
@@ -377,10 +374,8 @@ class Giveaways(commands.Cog):
                 inline=False
             )
             
-            # Update original giveaway message to show it ended (no claim buttons here)
             await original_msg.edit(embed=results_embed, view=None)
             
-            # Send winner announcement with claim buttons attached
             announcement_embed = discord.Embed(
                 title="🎉 Giveaway Winners Announced! 🎉",
                 description=f"**Giveaway:** {giveaway.title}\n"
@@ -390,11 +385,8 @@ class Giveaways(commands.Cog):
                 color=0x00ff00,
                 timestamp=datetime.now(timezone.utc)
             )
-            announcement_embed.set_footer(
-                text="Prize claim is open."
-            )
+            announcement_embed.set_footer(text="Prize claim is open.")
 
-            # Claim view goes on the announcement message
             claim_view = WinnerClaimView(
                 winners, giveaway.prize,
                 giveaway.channel_id, message_id,
@@ -406,9 +398,8 @@ class Giveaways(commands.Cog):
                 embed=announcement_embed,
                 view=claim_view
             )
-            claim_view.message = announcement_msg  # so on_timeout can edit it
+            claim_view.message = announcement_msg
             
-            # DM winners
             for winner_id in winners:
                 try:
                     user = await self.bot.fetch_user(winner_id)
@@ -431,7 +422,6 @@ class Giveaways(commands.Cog):
             )
             await original_msg.edit(embed=results_embed, view=None)
         
-        # Remove from active giveaways
         self.giveaway_data.remove_giveaway(message_id)
     
     # ------------------------------------------------------------------
@@ -463,12 +453,10 @@ class Giveaways(commands.Cog):
         claim_time_minutes: int = 10,
         claim_time_seconds: int = 0,
     ):
-        # Check permissions
         if not interaction.user.guild_permissions.administrator:
             await interaction.response.send_message("❌ Admin only command!", ephemeral=True)
             return
         
-        # Calculate end time
         total_seconds = (duration_minutes * 60) + duration_seconds
         if total_seconds <= 0:
             await interaction.response.send_message("❌ Please specify a duration greater than 0!", ephemeral=True)
@@ -476,12 +464,10 @@ class Giveaways(commands.Cog):
         
         end_time = datetime.now(timezone.utc) + timedelta(seconds=total_seconds)
         
-        # Validate winners count
         if winners < 1 or winners > 25:
             await interaction.response.send_message("❌ Winners must be between 1 and 25!", ephemeral=True)
             return
         
-        # Create giveaway embed
         embed = discord.Embed(
             title=f"🎉 {title} 🎉",
             description=description,
@@ -491,14 +477,12 @@ class Giveaways(commands.Cog):
         embed.add_field(name="🎁 Prize", value=prize, inline=False)
         embed.add_field(name="👑 Winners", value=str(winners), inline=True)
         
-        # Format end time
         end_timestamp = int(end_time.timestamp())
         embed.add_field(name="⏰ Ends", value=f"<t:{end_timestamp}:F> (<t:{end_timestamp}:R>)", inline=True)
         
         embed.add_field(name="📊 Total Entries", value="0", inline=False)
         embed.set_footer(text=f"Hosted by {interaction.user.name}", icon_url=interaction.user.display_avatar.url)
         
-        # Create giveaway object
         total_claim_seconds = (claim_time_minutes * 60) + claim_time_seconds
         if total_claim_seconds < 30:
             await interaction.response.send_message("❌ Claim time must be at least 30 seconds!", ephemeral=True)
@@ -515,7 +499,6 @@ class Giveaways(commands.Cog):
             claim_time_seconds=total_claim_seconds
         )
         
-        # Send message and save
         await interaction.response.send_message("✅ Creating giveaway...", ephemeral=True)
         
         view = GiveawayView(self.giveaway_data, giveaway)
@@ -562,15 +545,11 @@ class Giveaways(commands.Cog):
             await interaction.followup.send("❌ Invalid message ID!", ephemeral=True)
             return
         
-        # Try to find the original message
         found = False
         for channel in interaction.guild.text_channels:
             try:
                 msg = await channel.fetch_message(msg_id)
                 if msg.embeds and "GIVEAWAY ENDED" in msg.embeds[0].title:
-                    # Found the giveaway message
-                    # In a real implementation, you'd need to store the entries
-                    # For now, let's say we can't reroll without stored data
                     await interaction.followup.send("❌ Reroll feature requires stored entries. Please re-run the giveaway instead.", ephemeral=True)
                     found = True
                     break
@@ -578,7 +557,7 @@ class Giveaways(commands.Cog):
                 continue
         
         if not found:
-            await interaction.followup.send("❌ Giveaway message not found!", ephemeral=True)
+            await interaction.followup.send("❌ Giveaway message not found!")
 
 
 async def setup(bot: commands.Bot):

@@ -12,6 +12,9 @@ BUILDING_ROLE = "Builder"
 
 SELLER_ROLES = [BASE_BUYING_ROLE, BEDROCK_ROLE, SPAWNER_ROLE, BUILDING_ROLE]
 
+# All recognised ticket-channel prefixes
+TICKET_PREFIXES = ("ticket-", "claimed-", "claim-")
+
 
 # ---------------------------------------------------------------------------
 # Permission checks
@@ -22,7 +25,6 @@ def is_staff():
         staff_role = discord.utils.get(interaction.guild.roles, name=STAFF_ROLE)
         if staff_role and staff_role in interaction.user.roles:
             return True
-        # Don't call send_message here – let the error handler do it cleanly
         raise app_commands.CheckFailure("❌ Staff only!")
     return app_commands.check(predicate)
 
@@ -42,18 +44,22 @@ def is_admin():
 def _get_creator_name(channel: discord.TextChannel) -> str:
     """Return the lowercased creator username from the channel topic or name."""
     if channel.topic and "Ticket by " in channel.topic:
-        # Topic format: "Ticket by Username | Category"
         try:
             return channel.topic.split("Ticket by ")[1].split(" |")[0].strip().lower()
         except IndexError:
             pass
     # Fallback: strip known prefixes from channel name
     name = channel.name
-    for prefix in ("claimed-", "ticket-"):
+    for prefix in TICKET_PREFIXES:
         if name.startswith(prefix):
             name = name[len(prefix):]
             break
     return name.lower()
+
+
+def _is_ticket_channel(channel: discord.TextChannel) -> bool:
+    """Return True if the channel name looks like a ticket channel."""
+    return any(channel.name.startswith(p) for p in TICKET_PREFIXES)
 
 
 # ---------------------------------------------------------------------------
@@ -171,8 +177,7 @@ class CategorySelect(discord.ui.Select):
         # Check for an existing open ticket owned by this user
         uname = interaction.user.name.lower()
         for ch in interaction.guild.text_channels:
-            if (ch.name.startswith("ticket-") or ch.name.startswith("claimed-")) and \
-                    ch.name.endswith(f"-{uname}"):
+            if _is_ticket_channel(ch) and ch.name.endswith(f"-{uname}"):
                 await interaction.followup.send(
                     f"❌ You already have an open ticket: {ch.mention}", ephemeral=True
                 )
@@ -185,13 +190,11 @@ class CategorySelect(discord.ui.Select):
         category = self.SELECT_MAP[self.values[0]]
         cfg = self.CONFIGS[category]
 
-        # Ensure Discord category exists
         dc_cat = discord.utils.get(interaction.guild.categories, name=cfg["cat"])
         if not dc_cat:
             dc_cat = await interaction.guild.create_category(cfg["cat"])
             await dc_cat.set_permissions(interaction.guild.default_role, read_messages=False)
 
-        # Build permission overwrites
         overwrites = {
             interaction.guild.default_role: discord.PermissionOverwrite(read_messages=False),
             interaction.user: discord.PermissionOverwrite(
@@ -234,7 +237,6 @@ class CategorySelect(discord.ui.Select):
         view = TicketView()
         await channel.send(embed=embed, view=view)
 
-        # Ping relevant roles
         mentions = " ".join(
             role.mention
             for rn in cfg["ping"]
@@ -245,7 +247,6 @@ class CategorySelect(discord.ui.Select):
 
         await interaction.followup.send(f"✅ Ticket created: {channel.mention}", ephemeral=True)
 
-        # Reset the dropdown back to the placeholder by re-sending a fresh view
         try:
             await interaction.message.edit(view=TicketPanelView())
         except Exception:
@@ -266,7 +267,6 @@ class TicketPanelView(discord.ui.View):
 class Tickets(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
-        # Register persistent views so buttons survive bot restarts
         bot.add_view(TicketView())
         bot.add_view(TicketPanelView())
 
@@ -296,7 +296,6 @@ class Tickets(commands.Cog):
     @app_commands.command(name="ticketpanel", description="Post the ticket panel in this channel")
     @is_admin()
     async def ticketpanel(self, interaction: discord.Interaction):
-        # Clean up old bot messages in this channel (last 20)
         async for msg in interaction.channel.history(limit=20):
             if msg.author == self.bot.user:
                 try:
@@ -327,14 +326,20 @@ class Tickets(commands.Cog):
     @is_staff()
     async def rename(self, interaction: discord.Interaction, new_name: str):
         ch = interaction.channel
-        if not (ch.name.startswith("ticket-") or ch.name.startswith("claimed-")):
+        prefix = None
+        for p in TICKET_PREFIXES:
+            if ch.name.startswith(p):
+                prefix = p
+                break
+
+        if not prefix:
             await interaction.response.send_message("❌ This command can only be used in ticket channels.", ephemeral=True)
             return
 
         clean = new_name.lower().replace(" ", "-")[:50]
         try:
-            await ch.edit(name=f"ticket-{clean}")
-            await interaction.response.send_message(f"✅ Channel renamed to `ticket-{clean}`.")
+            await ch.edit(name=f"{prefix}{clean}")
+            await interaction.response.send_message(f"✅ Channel renamed to `{prefix}{clean}`.")
         except discord.HTTPException as e:
             await interaction.response.send_message(f"❌ Rename failed: {e}", ephemeral=True)
 
@@ -361,11 +366,10 @@ class Tickets(commands.Cog):
     @app_commands.command(name="close", description="Close the current ticket")
     async def close(self, interaction: discord.Interaction):
         ch = interaction.channel
-        if not (ch.name.startswith("ticket-") or ch.name.startswith("claimed-")):
+        if not _is_ticket_channel(ch):
             await interaction.response.send_message("❌ This command can only be used in ticket channels.", ephemeral=True)
             return
 
-        # Check permissions: staff/seller roles OR the ticket creator
         has_perm = any(
             (role := discord.utils.get(interaction.guild.roles, name=rn)) and role in interaction.user.roles
             for rn in [STAFF_ROLE, *SELLER_ROLES]
