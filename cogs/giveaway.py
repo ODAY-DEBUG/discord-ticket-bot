@@ -71,6 +71,9 @@ class Giveaway:
         self.claim_time_seconds = claim_time_seconds
         self.entries = []
         self.ended = False
+        self.winners = []
+        self.announcement_message_id = None
+        self.claim_end_time = None
     
     def to_dict(self):
         return {
@@ -84,7 +87,10 @@ class Giveaway:
             'message_id': self.message_id,
             'entries': self.entries,
             'ended': self.ended,
-            'claim_time_seconds': self.claim_time_seconds
+            'claim_time_seconds': self.claim_time_seconds,
+            'winners': self.winners,
+            'announcement_message_id': self.announcement_message_id,
+            'claim_end_time': self.claim_end_time.isoformat() if self.claim_end_time else None,
         }
     
     @classmethod
@@ -102,6 +108,10 @@ class Giveaway:
         giveaway.entries = data.get('entries', [])
         giveaway.ended = data.get('ended', False)
         giveaway.claim_time_seconds = data.get('claim_time_seconds', 600)
+        giveaway.winners = data.get('winners', [])
+        giveaway.announcement_message_id = data.get('announcement_message_id')
+        claim_end = data.get('claim_end_time')
+        giveaway.claim_end_time = datetime.fromisoformat(claim_end) if claim_end else None
         return giveaway
     
     def add_entry(self, user_id: int):
@@ -130,45 +140,52 @@ class WinnerClaimView(discord.ui.View):
         prize: str,
         giveaway_channel_id: int,
         giveaway_message_id: int,
-        claim_time_seconds: int = 600
+        claim_end_time: datetime
     ):
-        super().__init__(timeout=claim_time_seconds)
+        super().__init__(timeout=None) # Persistent to survive bot restarts
 
         self.winners = winners
         self.prize = prize
         self.giveaway_channel_id = giveaway_channel_id
         self.giveaway_message_id = giveaway_message_id
+        self.claim_end_time = claim_end_time
         self.claimed_users = set()
-        self.message = None
-
-    @discord.ui.button(
-        label="🎁 Claim Prize",
-        style=discord.ButtonStyle.green,
-        custom_id="claim_prize"
-    )
-    async def claim_button(
-        self,
-        interaction: discord.Interaction,
-        button: discord.ui.Button
-    ):
-        if interaction.user.id not in self.winners:
-            await interaction.response.send_message(
-                "❌ You are not one of the giveaway winners!",
-                ephemeral=True
-            )
-            return
-
-        if interaction.user.id in self.claimed_users:
-            await interaction.response.send_message(
-                "❌ You already claimed your prize!",
-                ephemeral=True
-            )
-            return
-
-        await self.create_claim_ticket(
-            interaction,
-            interaction.user.id
+        
+        # Add button dynamically with unique custom_id
+        button = discord.ui.Button(
+            label="🎁 Claim Prize",
+            style=discord.ButtonStyle.green,
+            custom_id=f"claim_{giveaway_message_id}"
         )
+        button.callback = self.claim_button_callback
+        self.add_item(button)
+
+    async def claim_button_callback(self, interaction: discord.Interaction):
+        # 1. Check if claim time is over
+        if datetime.now(timezone.utc) > self.claim_end_time:
+            await interaction.response.send_message("❌ The claim period has expired!", ephemeral=True)
+            try:
+                embed = interaction.message.embeds[0]
+                if "expired" not in embed.description:
+                    embed.description += "\n\n⏰ Claim period has expired."
+                    embed.color = discord.Color.red()
+                await interaction.message.edit(embed=embed, view=None)
+            except:
+                pass
+            return
+
+        # 2. Check if user is a winner
+        if interaction.user.id not in self.winners:
+            await interaction.response.send_message("❌ You are not one of the giveaway winners!", ephemeral=True)
+            return
+
+        # 3. Check if already claimed
+        if interaction.user.id in self.claimed_users:
+            await interaction.response.send_message("❌ You already claimed your prize!", ephemeral=True)
+            return
+
+        # 4. Create ticket
+        await self.create_claim_ticket(interaction, interaction.user.id)
 
     async def create_claim_ticket(self, interaction, winner_id):
         guild = interaction.guild
@@ -262,23 +279,6 @@ class WinnerClaimView(discord.ui.View):
             ephemeral=True
         )
 
-    async def on_timeout(self):
-        """Fires after claim_time_seconds — removes the Claim Prize button."""
-        if not self.message:
-            return
-
-        try:
-            embed = self.message.embeds[0]
-            embed.description = (
-                embed.description +
-                "\n\n⏰ Claim period has expired."
-            )
-            embed.color = discord.Color.red()
-            # view=None removes the button from the message
-            await self.message.edit(embed=embed, view=None)
-        except Exception as e:
-            print(f"Claim timeout error: {e}")
-
 
 class GiveawayButton(discord.ui.Button):
     def __init__(self, giveaway_data: GiveawayData, giveaway: Giveaway):
@@ -332,6 +332,25 @@ class Giveaways(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
         self.giveaway_data = GiveawayData()
+        
+        # Restore persistent views on startup
+        for msg_id, giveaway in self.giveaway_data.active_giveaways.items():
+            if not giveaway.ended:
+                # Restore active giveaway enter buttons
+                view = GiveawayView(self.giveaway_data, giveaway)
+                bot.add_view(view)
+            elif giveaway.ended and giveaway.claim_end_time and giveaway.winners:
+                # Restore active claim buttons if claim period hasn't expired
+                if datetime.now(timezone.utc) < giveaway.claim_end_time:
+                    view = WinnerClaimView(
+                        winners=giveaway.winners,
+                        prize=giveaway.prize,
+                        giveaway_channel_id=giveaway.channel_id,
+                        giveaway_message_id=giveaway.message_id,
+                        claim_end_time=giveaway.claim_end_time
+                    )
+                    bot.add_view(view)
+                    
         self.check_giveaways.start()
     
     def cog_unload(self):
@@ -341,13 +360,36 @@ class Giveaways(commands.Cog):
     async def check_giveaways(self):
         now = datetime.now(timezone.utc)
         ended_giveaways = []
+        expired_claims = []
         
         for msg_id, giveaway in self.giveaway_data.active_giveaways.items():
             if not giveaway.ended and now >= giveaway.end_time:
                 ended_giveaways.append((msg_id, giveaway))
+            elif giveaway.ended and giveaway.claim_end_time and now >= giveaway.claim_end_time:
+                expired_claims.append((msg_id, giveaway))
         
         for msg_id, giveaway in ended_giveaways:
             await self.end_giveaway(msg_id, giveaway)
+            
+        for msg_id, giveaway in expired_claims:
+            await self.expire_claim(msg_id, giveaway)
+    
+    async def expire_claim(self, message_id: int, giveaway: Giveaway):
+        """Remove claim button and clean up after claim period expires."""
+        channel = self.bot.get_channel(giveaway.channel_id)
+        if channel and giveaway.announcement_message_id:
+            try:
+                msg = await channel.fetch_message(giveaway.announcement_message_id)
+                if msg.embeds:
+                    embed = msg.embeds[0]
+                    if "expired" not in embed.description:
+                        embed.description += "\n\n⏰ Claim period has expired."
+                        embed.color = discord.Color.red()
+                    await msg.edit(embed=embed, view=None)
+            except Exception as e:
+                print(f"Failed to expire claim view: {e}")
+                
+        self.giveaway_data.remove_giveaway(message_id)
     
     async def end_giveaway(self, message_id: int, giveaway: Giveaway):
         giveaway.ended = True
@@ -395,10 +437,12 @@ class Giveaways(commands.Cog):
             )
             announcement_embed.set_footer(text="Prize claim is open.")
 
+            claim_end_time = datetime.now(timezone.utc) + timedelta(seconds=giveaway.claim_time_seconds)
+
             claim_view = WinnerClaimView(
                 winners, giveaway.prize,
                 giveaway.channel_id, message_id,
-                giveaway.claim_time_seconds
+                claim_end_time
             )
 
             announcement_msg = await channel.send(
@@ -406,8 +450,14 @@ class Giveaways(commands.Cog):
                 embed=announcement_embed,
                 view=claim_view
             )
-            claim_view.message = announcement_msg
             
+            # Save the new state so it persists if the bot restarts during claim period
+            giveaway.winners = winners
+            giveaway.announcement_message_id = announcement_msg.id
+            giveaway.claim_end_time = claim_end_time
+            self.giveaway_data.save_data()
+            
+            # DM winners
             for winner_id in winners:
                 try:
                     user = await self.bot.fetch_user(winner_id)
@@ -429,8 +479,7 @@ class Giveaways(commands.Cog):
                 inline=False
             )
             await original_msg.edit(embed=results_embed, view=None)
-        
-        self.giveaway_data.remove_giveaway(message_id)
+            self.giveaway_data.remove_giveaway(message_id)
     
     # ------------------------------------------------------------------
     # Commands
