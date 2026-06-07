@@ -289,19 +289,20 @@ class GiveawayButton(discord.ui.Button):
             await interaction.response.send_message("✅ You have entered the giveaway! Good luck! 🎉", ephemeral=True)
             # Update the entry count on the embed
             try:
-                msg = await interaction.channel.fetch_message(self.giveaway.message_id)
-                if msg.embeds:
-                    embed = msg.embeds[0]
-                    new_fields = []
-                    for field in embed.fields:
-                        if field.name == "📊 Total Entries":
-                            new_fields.append(discord.EmbedField(name="📊 Total Entries", value=str(len(self.giveaway.entries)), inline=False))
-                        else:
-                            new_fields.append(field)
-                    embed.clear_fields()
-                    for field in new_fields:
-                        embed.add_field(name=field.name, value=field.value, inline=field.inline)
-                    await msg.edit(embed=embed)
+                channel = interaction.client.get_channel(self.giveaway.channel_id)
+                if channel:
+                    msg = await channel.fetch_message(self.giveaway.message_id)
+                    if msg.embeds:
+                        embed = msg.embeds[0]
+                        # Store existing fields, replace entry count
+                        fields = [(f.name, f.value, f.inline) for f in embed.fields]
+                        embed.clear_fields()
+                        for name, value, inline in fields:
+                            if name == "📊 Total Entries":
+                                embed.add_field(name="📊 Total Entries", value=str(len(self.giveaway.entries)), inline=inline)
+                            else:
+                                embed.add_field(name=name, value=value, inline=inline)
+                        await msg.edit(embed=embed)
             except Exception as e:
                 print(f"Failed to update entry count: {e}")
         else:
