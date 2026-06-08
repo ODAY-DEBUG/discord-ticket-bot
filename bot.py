@@ -12,7 +12,16 @@ intents.message_content = True
 intents.members = True
 intents.guilds = True
 
-COGS = ['cogs.tickets', 'cogs.moderation', 'cogs.giveaway']
+COGS = [
+    'cogs.moderation',
+    'cogs.giveaway',
+    'cogs.tickets_base',
+    'cogs.tickets_base_buying',
+    'cogs.tickets_bedrock',
+    'cogs.tickets_spawner',
+    'cogs.tickets_building',
+    'cogs.tickets_support',
+]
 
 
 class Bot(commands.Bot):
