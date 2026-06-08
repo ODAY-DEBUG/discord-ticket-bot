@@ -1,11 +1,46 @@
 import discord
 from discord.ext import commands
 from discord import app_commands
+import json
+import os
 from cogs.config import staff_only
+
+# ---------------------------------------------------------------------------
+# Persistence for Stickies
+# ---------------------------------------------------------------------------
+
+STICKIES_FILE = "stickies.json"
 
 # In-memory store: { channel_id: { "message_id": int, "content": str } }
 _stickies: dict[int, dict] = {}
 
+def load_stickies():
+    global _stickies
+    if os.path.exists(STICKIES_FILE):
+        try:
+            with open(STICKIES_FILE, 'r') as f:
+                data = json.load(f)
+                for channel_id_str, sticky_data in data.items():
+                    _stickies[int(channel_id_str)] = sticky_data
+            print(f"✅ Loaded {len(_stickies)} sticky messages")
+        except Exception as e:
+            print(f"❌ Failed to load stickies: {e}")
+
+def save_stickies():
+    try:
+        # Convert integer keys to strings for JSON compatibility
+        data = {str(channel_id): sticky_data for channel_id, sticky_data in _stickies.items()}
+        with open(STICKIES_FILE, 'w') as f:
+            json.dump(data, f, indent=2)
+    except Exception as e:
+        print(f"❌ Failed to save stickies: {e}")
+
+# Load stickies on startup
+load_stickies()
+
+# ---------------------------------------------------------------------------
+# Cog
+# ---------------------------------------------------------------------------
 
 class Sticky(commands.Cog):
     def __init__(self, bot: commands.Bot):
@@ -41,10 +76,12 @@ class Sticky(commands.Cog):
         embed = discord.Embed(description=sticky["content"], color=0xf1c40f)
         embed.set_footer(text="📌 Sticky Message")
         new_msg = await message.channel.send(embed=embed)
+        
         _stickies[channel_id]["message_id"] = new_msg.id
+        save_stickies()  # Save the updated message ID so we delete the right one next time
 
     # ------------------------------------------------------------------
-    # /sticky
+    # /sticky  (NOW SAVES TO JSON)
     # ------------------------------------------------------------------
 
     @app_commands.command(name="sticky", description="Set a sticky message in a channel")
@@ -67,13 +104,14 @@ class Sticky(commands.Cog):
         sent = await channel.send(embed=embed)
 
         _stickies[channel.id] = {"message_id": sent.id, "content": message}
+        save_stickies()  # <-- Save to file
 
         await interaction.response.send_message(
             f"✅ Sticky message set in {channel.mention}.", ephemeral=True
         )
 
     # ------------------------------------------------------------------
-    # /unsticky
+    # /unsticky  (NOW SAVES TO JSON)
     # ------------------------------------------------------------------
 
     @app_commands.command(name="unsticky", description="Remove the sticky message from a channel")
@@ -93,6 +131,8 @@ class Sticky(commands.Cog):
             pass
 
         del _stickies[channel.id]
+        save_stickies()  # <-- Save to file
+
         await interaction.response.send_message(
             f"✅ Sticky message removed from {channel.mention}.", ephemeral=True
         )

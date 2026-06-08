@@ -3,12 +3,52 @@ from discord.ext import commands
 from discord import app_commands
 from datetime import datetime, timezone, timedelta
 from collections import defaultdict
+import json
+import os
 from cogs.config import STAFF_ROLE, LOG_CHANNEL, mod_only
 
+# ---------------------------------------------------------------------------
+# Persistence for Warnings
+# ---------------------------------------------------------------------------
+
+WARNINGS_FILE = "warnings.json"
+
 # In-memory warning store  { guild_id: { user_id: [ {reason, mod, ts}, ... ] } }
-# Resets on bot restart. Replace with a DB if you need persistence.
 _warnings: dict[int, dict[int, list]] = defaultdict(lambda: defaultdict(list))
 
+def load_warnings():
+    global _warnings
+    if os.path.exists(WARNINGS_FILE):
+        try:
+            with open(WARNINGS_FILE, 'r') as f:
+                data = json.load(f)
+                for guild_id_str, guild_data in data.items():
+                    for user_id_str, user_warns in guild_data.items():
+                        _warnings[int(guild_id_str)][int(user_id_str)] = user_warns
+            print(f"✅ Loaded warnings for {sum(len(v) for v in _warnings.values())} users")
+        except Exception as e:
+            print(f"❌ Failed to load warnings: {e}")
+
+def save_warnings():
+    try:
+        # Convert integer keys to strings for JSON compatibility
+        data = {}
+        for guild_id, guild_data in _warnings.items():
+            data[str(guild_id)] = {}
+            for user_id, user_warns in guild_data.items():
+                data[str(guild_id)][str(user_id)] = user_warns
+        
+        with open(WARNINGS_FILE, 'w') as f:
+            json.dump(data, f, indent=2)
+    except Exception as e:
+        print(f"❌ Failed to save warnings: {e}")
+
+# Load warnings on startup
+load_warnings()
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
 
 async def _log(interaction: discord.Interaction, embed: discord.Embed):
     """Send an embed to the mod-log channel if it exists."""
@@ -248,7 +288,7 @@ class Moderation(commands.Cog):
         await _log(interaction, embed)
 
     # ------------------------------------------------------------------
-    # /warn
+    # /warn  (NOW SAVES TO JSON)
     # ------------------------------------------------------------------
 
     @app_commands.command(name="warn", description="Issue a warning to a member")
@@ -266,6 +306,7 @@ class Moderation(commands.Cog):
             "ts":     datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC"),
         }
         _warnings[interaction.guild.id][member.id].append(entry)
+        save_warnings()  # <-- Save to file
         count = len(_warnings[interaction.guild.id][member.id])
 
         embed = _mod_embed("Warning", member, interaction.user, reason, 0xf1c40f,
@@ -313,7 +354,7 @@ class Moderation(commands.Cog):
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
     # ------------------------------------------------------------------
-    # /clearwarnings
+    # /clearwarnings (NOW SAVES TO JSON)
     # ------------------------------------------------------------------
 
     @app_commands.command(name="clearwarnings", description="Clear all warnings for a member")
@@ -326,6 +367,7 @@ class Moderation(commands.Cog):
             return
 
         _warnings[interaction.guild.id][member.id].clear()
+        save_warnings()  # <-- Save to file
 
         embed = discord.Embed(
             title="🗑️ Warnings Cleared",
@@ -381,7 +423,7 @@ class Moderation(commands.Cog):
 
 
     # ------------------------------------------------------------------
-    # /lock
+    # /lock  (FIXED PERMISSIONS)
     # ------------------------------------------------------------------
 
     @app_commands.command(name="lock", description="Lock the channel so only Staff can send messages")
@@ -392,7 +434,7 @@ class Moderation(commands.Cog):
         staff_role = discord.utils.get(interaction.guild.roles, name=STAFF_ROLE)
         everyone = interaction.guild.default_role
 
-        # Check if already locked
+        # Safely check current overwrite status
         overwrite = channel.overwrites_for(everyone)
         if overwrite.send_messages is False:
             await interaction.response.send_message("❌ This channel is already locked.", ephemeral=True)
@@ -403,10 +445,15 @@ class Moderation(commands.Cog):
             return
 
         try:
-            # Deny send_messages for @everyone
-            await channel.set_permissions(everyone, send_messages=False)
+            # Safely update only send_messages for @everyone
+            overwrite.send_messages = False
+            await channel.set_permissions(everyone, overwrite=overwrite)
+            
             # Ensure Staff can still send
-            await channel.set_permissions(staff_role, send_messages=True, read_messages=True)
+            staff_overwrite = channel.overwrites_for(staff_role)
+            staff_overwrite.send_messages = True
+            staff_overwrite.read_messages = True
+            await channel.set_permissions(staff_role, overwrite=staff_overwrite)
             
             embed = discord.Embed(
                 title="🔒 Channel Locked",
@@ -425,7 +472,7 @@ class Moderation(commands.Cog):
             await interaction.response.send_message("❌ I don't have permission to edit this channel.", ephemeral=True)
 
     # ------------------------------------------------------------------
-    # /unlock
+    # /unlock  (FIXED PERMISSIONS)
     # ------------------------------------------------------------------
 
     @app_commands.command(name="unlock", description="Unlock the channel so everyone can send messages again")
@@ -435,15 +482,16 @@ class Moderation(commands.Cog):
         channel = interaction.channel
         everyone = interaction.guild.default_role
 
-        # Check if currently locked
+        # Safely check current overwrite status
         overwrite = channel.overwrites_for(everyone)
         if overwrite.send_messages is not False:
             await interaction.response.send_message("❌ This channel is not locked.", ephemeral=True)
             return
 
         try:
-            # Restore send_messages for @everyone (None = inherit from category/default)
-            await channel.set_permissions(everyone, overwrite=None)
+            # Restore send_messages to default (None) without wiping other overwrites
+            overwrite.send_messages = None
+            await channel.set_permissions(everyone, overwrite=overwrite)
             
             embed = discord.Embed(
                 title="🔓 Channel Unlocked",
@@ -462,7 +510,7 @@ class Moderation(commands.Cog):
             await interaction.response.send_message("❌ I don't have permission to edit this channel.", ephemeral=True)
 
     # ------------------------------------------------------------------
-    # /rename  (channel rename, usable anywhere)
+    # /rename
     # ------------------------------------------------------------------
 
     @app_commands.command(name="rename", description="Rename the current channel")
@@ -479,7 +527,7 @@ class Moderation(commands.Cog):
             await interaction.response.send_message(f"❌ Rename failed: {e}", ephemeral=True)
 
     # ------------------------------------------------------------------
-    # /add  (add user to channel, usable anywhere)
+    # /add
     # ------------------------------------------------------------------
 
     @app_commands.command(name="add", description="Add a user to the current channel")
@@ -493,7 +541,7 @@ class Moderation(commands.Cog):
         await interaction.response.send_message(f"✅ {member.mention} has been added to this channel.")
 
     # ------------------------------------------------------------------
-    # /remove  (remove user from channel, usable anywhere)
+    # /remove
     # ------------------------------------------------------------------
 
     @app_commands.command(name="remove", description="Remove a user from the current channel")
