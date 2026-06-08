@@ -141,6 +141,10 @@ class TicketView(discord.ui.View):
 # Persistent panel view — buttons instead of dropdown
 # ---------------------------------------------------------------------------
 
+# ---------------------------------------------------------------------------
+# Full panel view (all 6 buttons)
+# ---------------------------------------------------------------------------
+
 class TicketPanelView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
@@ -177,7 +181,79 @@ class TicketPanelView(discord.ui.View):
 
 
 # ---------------------------------------------------------------------------
-# Cog — ticket management commands + panel command
+# Single-category panel views
+# ---------------------------------------------------------------------------
+
+class BaseBuyingPanelView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=None)
+
+    @discord.ui.button(label="🏠 Open Base Buying Ticket", style=discord.ButtonStyle.primary, custom_id="sp_base_v14")
+    async def btn(self, interaction: discord.Interaction, button: discord.ui.Button):
+        from cogs.tickets_base_buying import BASE_CFG
+        await open_ticket(interaction, BASE_CFG, "Base Buying")
+
+
+class BedrockPanelView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=None)
+
+    @discord.ui.button(label="🕳️ Open Bedrock Hole Ticket", style=discord.ButtonStyle.primary, custom_id="sp_bedrock_v14")
+    async def btn(self, interaction: discord.Interaction, button: discord.ui.Button):
+        from cogs.tickets_bedrock import BEDROCK_CFG
+        await open_ticket(interaction, BEDROCK_CFG, "Bedrock Hole Buying")
+
+
+class SpawnerPanelView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=None)
+
+    @discord.ui.button(label="🔄 Open Spawner Trade Ticket", style=discord.ButtonStyle.primary, custom_id="sp_spawner_v14")
+    async def btn(self, interaction: discord.Interaction, button: discord.ui.Button):
+        from cogs.tickets_spawner import SPAWNER_CFG
+        await open_ticket(interaction, SPAWNER_CFG, "Spawner Trading")
+
+
+class BuildingPanelView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=None)
+
+    @discord.ui.button(label="🏗️ Open Building Ticket", style=discord.ButtonStyle.primary, custom_id="sp_building_v14")
+    async def btn(self, interaction: discord.Interaction, button: discord.ui.Button):
+        from cogs.tickets_building import BUILDING_CFG
+        await open_ticket(interaction, BUILDING_CFG, "Building")
+
+
+class SupportPanelView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=None)
+
+    @discord.ui.button(label="❓ Open Support Ticket",   style=discord.ButtonStyle.secondary, custom_id="sp_support_v14", row=0)
+    async def btn_support(self, interaction: discord.Interaction, button: discord.ui.Button):
+        from cogs.tickets_support import SUPPORT_CFG
+        await open_ticket(interaction, SUPPORT_CFG, "General Support")
+
+    @discord.ui.button(label="⚠️ Report a Scam",        style=discord.ButtonStyle.danger,    custom_id="sp_scam_v14",    row=0)
+    async def btn_scam(self, interaction: discord.Interaction, button: discord.ui.Button):
+        from cogs.tickets_support import SCAM_CFG
+        await open_ticket(interaction, SCAM_CFG, "Scam Report")
+
+
+# ---------------------------------------------------------------------------
+# Helper: clear bot messages in a channel before posting a panel
+# ---------------------------------------------------------------------------
+
+async def _clear_bot_messages(channel: discord.TextChannel, bot_user):
+    async for msg in channel.history(limit=20):
+        if msg.author == bot_user:
+            try:
+                await msg.delete()
+            except discord.HTTPException:
+                pass
+
+
+# ---------------------------------------------------------------------------
+# Cog — ticket management commands + panel commands
 # ---------------------------------------------------------------------------
 
 class TicketsBase(commands.Cog):
@@ -185,6 +261,11 @@ class TicketsBase(commands.Cog):
         self.bot = bot
         bot.add_view(TicketView())
         bot.add_view(TicketPanelView())
+        bot.add_view(BaseBuyingPanelView())
+        bot.add_view(BedrockPanelView())
+        bot.add_view(SpawnerPanelView())
+        bot.add_view(BuildingPanelView())
+        bot.add_view(SupportPanelView())
 
     async def cog_app_command_error(self, interaction: discord.Interaction, error: app_commands.AppCommandError):
         msg = str(error) if isinstance(error, app_commands.CheckFailure) else f"❌ Unexpected error: {error}"
@@ -193,16 +274,14 @@ class TicketsBase(commands.Cog):
         else:
             await interaction.response.send_message(msg, ephemeral=True)
 
-    @app_commands.command(name="ticketpanel", description="Post the ticket panel in this channel")
+    # ------------------------------------------------------------------
+    # Full panel (all categories)
+    # ------------------------------------------------------------------
+
+    @app_commands.command(name="ticketpanel", description="Post the full ticket panel (all categories)")
     @admin_only()
     async def ticketpanel(self, interaction: discord.Interaction):
-        async for msg in interaction.channel.history(limit=20):
-            if msg.author == self.bot.user:
-                try:
-                    await msg.delete()
-                except discord.HTTPException:
-                    pass
-
+        await _clear_bot_messages(interaction.channel, self.bot.user)
         embed = discord.Embed(
             title="🎫 Support Tickets",
             description=(
@@ -218,8 +297,80 @@ class TicketsBase(commands.Cog):
         )
         if interaction.guild.icon:
             embed.set_thumbnail(url=interaction.guild.icon.url)
-
         await interaction.response.send_message(embed=embed, view=TicketPanelView())
+
+    # ------------------------------------------------------------------
+    # Per-category panels
+    # ------------------------------------------------------------------
+
+    @app_commands.command(name="ticketpanel_basebuying", description="Post the Base Buying ticket panel")
+    @admin_only()
+    async def ticketpanel_basebuying(self, interaction: discord.Interaction):
+        await _clear_bot_messages(interaction.channel, self.bot.user)
+        embed = discord.Embed(
+            title="🏠 Base Buying",
+            description="Click the button below to open a **Base Buying** ticket.",
+            color=0x2ecc71,
+        )
+        if interaction.guild.icon:
+            embed.set_thumbnail(url=interaction.guild.icon.url)
+        await interaction.response.send_message(embed=embed, view=BaseBuyingPanelView())
+
+    @app_commands.command(name="ticketpanel_bedrock", description="Post the Bedrock Hole ticket panel")
+    @admin_only()
+    async def ticketpanel_bedrock(self, interaction: discord.Interaction):
+        await _clear_bot_messages(interaction.channel, self.bot.user)
+        embed = discord.Embed(
+            title="🕳️ Bedrock Hole Buying",
+            description="Click the button below to open a **Bedrock Hole** ticket.",
+            color=0x95a5a6,
+        )
+        if interaction.guild.icon:
+            embed.set_thumbnail(url=interaction.guild.icon.url)
+        await interaction.response.send_message(embed=embed, view=BedrockPanelView())
+
+    @app_commands.command(name="ticketpanel_spawner", description="Post the Spawner Trading ticket panel")
+    @admin_only()
+    async def ticketpanel_spawner(self, interaction: discord.Interaction):
+        await _clear_bot_messages(interaction.channel, self.bot.user)
+        embed = discord.Embed(
+            title="🔄 Spawner Trading",
+            description="Click the button below to open a **Spawner Trade** ticket.",
+            color=0xf1c40f,
+        )
+        if interaction.guild.icon:
+            embed.set_thumbnail(url=interaction.guild.icon.url)
+        await interaction.response.send_message(embed=embed, view=SpawnerPanelView())
+
+    @app_commands.command(name="ticketpanel_building", description="Post the Building ticket panel")
+    @admin_only()
+    async def ticketpanel_building(self, interaction: discord.Interaction):
+        await _clear_bot_messages(interaction.channel, self.bot.user)
+        embed = discord.Embed(
+            title="🏗️ Building",
+            description="Click the button below to open a **Building** ticket.",
+            color=0x9b59b6,
+        )
+        if interaction.guild.icon:
+            embed.set_thumbnail(url=interaction.guild.icon.url)
+        await interaction.response.send_message(embed=embed, view=BuildingPanelView())
+
+    @app_commands.command(name="ticketpanel_support", description="Post the Support & Scam Report ticket panel")
+    @admin_only()
+    async def ticketpanel_support(self, interaction: discord.Interaction):
+        await _clear_bot_messages(interaction.channel, self.bot.user)
+        embed = discord.Embed(
+            title="❓ Support & Reports",
+            description=(
+                "Click a button below to open a ticket.\n\n"
+                "❓ **Support** — General help\n"
+                "⚠️ **Scam Report** — Report a scam"
+            ),
+            color=0x3498db,
+        )
+        if interaction.guild.icon:
+            embed.set_thumbnail(url=interaction.guild.icon.url)
+        await interaction.response.send_message(embed=embed, view=SupportPanelView())
 
     @app_commands.command(name="rename", description="Rename the current ticket channel")
     @app_commands.describe(new_name="New channel name (replaces current name entirely, prefix is kept)")

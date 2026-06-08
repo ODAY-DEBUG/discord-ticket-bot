@@ -3,7 +3,7 @@ from discord.ext import commands
 from discord import app_commands
 from datetime import datetime, timezone, timedelta
 from collections import defaultdict
-from cogs.config import LOG_CHANNEL, mod_only
+from cogs.config import STAFF_ROLE, LOG_CHANNEL, mod_only
 
 # In-memory warning store  { guild_id: { user_id: [ {reason, mod, ts}, ... ] } }
 # Resets on bot restart. Replace with a DB if you need persistence.
