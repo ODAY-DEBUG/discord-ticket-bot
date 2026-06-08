@@ -373,27 +373,20 @@ class TicketsBase(commands.Cog):
         await interaction.response.send_message(embed=embed, view=SupportPanelView())
 
     @app_commands.command(name="rename", description="Rename the current ticket channel")
-    @app_commands.describe(new_name="New channel name (replaces everything after the prefix)")
+    @app_commands.describe(new_name="New channel name (no prefix, e.g. 'staff 2m' → 'staff-2m')")
     @staff_only()
     async def rename(self, interaction: discord.Interaction, new_name: str):
         ch = interaction.channel
-        prefix = None
-        for p in TICKET_PREFIXES:
-            if ch.name.startswith(p):
-                prefix = p
-                break
-
-        if not prefix:
+        if not is_ticket_channel(ch):
             await interaction.response.send_message(
                 "❌ This command can only be used in ticket channels.", ephemeral=True
             )
             return
 
         clean = new_name.lower().replace(" ", "-")[:50]
-        new_channel_name = f"{prefix}{clean}"
         try:
-            await ch.edit(name=new_channel_name)
-            await interaction.response.send_message(f"✅ Channel renamed to `{new_channel_name}`.")
+            await ch.edit(name=clean)
+            await interaction.response.send_message(f"✅ Channel renamed to `{clean}`.")
         except discord.HTTPException as e:
             await interaction.response.send_message(f"❌ Rename failed: {e}", ephemeral=True)
 
