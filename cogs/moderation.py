@@ -461,6 +461,51 @@ class Moderation(commands.Cog):
         except discord.Forbidden:
             await interaction.response.send_message("❌ I don't have permission to edit this channel.", ephemeral=True)
 
+    # ------------------------------------------------------------------
+    # /rename  (channel rename, usable anywhere)
+    # ------------------------------------------------------------------
+
+    @app_commands.command(name="rename", description="Rename the current channel")
+    @app_commands.describe(new_name="New channel name (spaces become dashes)")
+    @mod_only()
+    async def rename(self, interaction: discord.Interaction, new_name: str):
+        clean = new_name.lower().replace(" ", "-")[:50]
+        try:
+            await interaction.channel.edit(name=clean)
+            await interaction.response.send_message(f"✅ Channel renamed to `{clean}`.")
+        except discord.Forbidden:
+            await interaction.response.send_message("❌ I don't have permission to rename this channel.", ephemeral=True)
+        except discord.HTTPException as e:
+            await interaction.response.send_message(f"❌ Rename failed: {e}", ephemeral=True)
+
+    # ------------------------------------------------------------------
+    # /add  (add user to channel, usable anywhere)
+    # ------------------------------------------------------------------
+
+    @app_commands.command(name="add", description="Add a user to the current channel")
+    @app_commands.describe(member="The member to add")
+    @mod_only()
+    async def add(self, interaction: discord.Interaction, member: discord.Member):
+        await interaction.channel.set_permissions(
+            member, read_messages=True, send_messages=True,
+            read_message_history=True, attach_files=True,
+        )
+        await interaction.response.send_message(f"✅ {member.mention} has been added to this channel.")
+
+    # ------------------------------------------------------------------
+    # /remove  (remove user from channel, usable anywhere)
+    # ------------------------------------------------------------------
+
+    @app_commands.command(name="remove", description="Remove a user from the current channel")
+    @app_commands.describe(member="The member to remove")
+    @mod_only()
+    async def remove(self, interaction: discord.Interaction, member: discord.Member):
+        if member == interaction.user:
+            await interaction.response.send_message("❌ You can't remove yourself!", ephemeral=True)
+            return
+        await interaction.channel.set_permissions(member, read_messages=False, send_messages=False)
+        await interaction.response.send_message(f"✅ {member.mention} has been removed from this channel.")
+
 
 async def setup(bot: commands.Bot):
     await bot.add_cog(Moderation(bot))

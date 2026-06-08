@@ -372,44 +372,6 @@ class TicketsBase(commands.Cog):
             embed.set_thumbnail(url=interaction.guild.icon.url)
         await interaction.response.send_message(embed=embed, view=SupportPanelView())
 
-    @app_commands.command(name="rename", description="Rename the current ticket channel")
-    @app_commands.describe(new_name="New channel name (no prefix, e.g. 'staff 2m' → 'staff-2m')")
-    @staff_only()
-    async def rename(self, interaction: discord.Interaction, new_name: str):
-        ch = interaction.channel
-        if not is_ticket_channel(ch):
-            await interaction.response.send_message(
-                "❌ This command can only be used in ticket channels.", ephemeral=True
-            )
-            return
-
-        clean = new_name.lower().replace(" ", "-")[:50]
-        try:
-            await ch.edit(name=clean)
-            await interaction.response.send_message(f"✅ Channel renamed to `{clean}`.")
-        except discord.HTTPException as e:
-            await interaction.response.send_message(f"❌ Rename failed: {e}", ephemeral=True)
-
-    @app_commands.command(name="add", description="Add a user to the current ticket")
-    @app_commands.describe(member="The member to add")
-    @staff_only()
-    async def add(self, interaction: discord.Interaction, member: discord.Member):
-        await interaction.channel.set_permissions(
-            member, read_messages=True, send_messages=True,
-            read_message_history=True, attach_files=True,
-        )
-        await interaction.response.send_message(f"✅ {member.mention} has been added to this ticket.")
-
-    @app_commands.command(name="remove", description="Remove a user from the current ticket")
-    @app_commands.describe(member="The member to remove")
-    @staff_only()
-    async def remove(self, interaction: discord.Interaction, member: discord.Member):
-        if member == interaction.user:
-            await interaction.response.send_message("❌ You can't remove yourself!", ephemeral=True)
-            return
-        await interaction.channel.set_permissions(member, read_messages=False, send_messages=False)
-        await interaction.response.send_message(f"✅ {member.mention} has been removed from this ticket.")
-
     @app_commands.command(name="close", description="Close the current ticket")
     async def close(self, interaction: discord.Interaction):
         ch = interaction.channel
