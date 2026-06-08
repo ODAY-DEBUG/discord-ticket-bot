@@ -72,10 +72,8 @@ class Sticky(commands.Cog):
         except (discord.NotFound, discord.HTTPException):
             pass
 
-        # Repost the sticky at the bottom
-        embed = discord.Embed(description=sticky["content"], color=0xf1c40f)
-        embed.set_footer(text="📌 Sticky Message")
-        new_msg = await message.channel.send(embed=embed)
+        # Repost the sticky as plain text
+        new_msg = await message.channel.send(sticky["content"])
         
         _stickies[channel_id]["message_id"] = new_msg.id
         save_stickies()  # Save the updated message ID so we delete the right one next time
@@ -99,9 +97,8 @@ class Sticky(commands.Cog):
             except (discord.NotFound, discord.HTTPException):
                 pass
 
-        embed = discord.Embed(description=message, color=0xf1c40f)
-        embed.set_footer(text="📌 Sticky Message")
-        sent = await channel.send(embed=embed)
+        # Post as plain text
+        sent = await channel.send(message)
 
         _stickies[channel.id] = {"message_id": sent.id, "content": message}
         save_stickies()  # <-- Save to file
