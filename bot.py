@@ -11,6 +11,7 @@ intents = discord.Intents.default()
 intents.message_content = True
 intents.members = True
 intents.guilds = True
+intents.reactions = True       # <-- ADD THIS
 
 COGS = [
     'cogs.moderation',
@@ -22,6 +23,7 @@ COGS = [
     'cogs.tickets_spawner',
     'cogs.tickets_building',
     'cogs.tickets_support',
+    'cogs.reactionroles',  
 ]
 
 
