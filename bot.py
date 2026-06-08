@@ -40,19 +40,11 @@ bot = Bot(command_prefix='!', intents=intents, help_command=None)
 @bot.event
 async def on_ready():
     print(f'✅ Bot online: {bot.user} (ID: {bot.user.id})')
-    
-    # Wait a bit for the cache to be fully ready
-    await asyncio.sleep(2)
-    
-    # Sync commands for each guild
-    for guild in bot.guilds:
-        try:
-            # Sync commands globally or per guild
-            bot.tree.copy_global_to(guild=guild)
-            guild_cmds = await bot.tree.sync(guild=guild)
-            print(f'✅ Synced {len(guild_cmds)} command(s) to {guild.name}: {[f"/{c.name}" for c in guild_cmds]}')
-        except Exception as e:
-            print(f'❌ Sync failed for {guild.name}: {e}')
+    try:
+        synced = await bot.tree.sync()
+        print(f'✅ Synced {len(synced)} global command(s): {[f"/{c.name}" for c in synced]}')
+    except Exception as e:
+        print(f'❌ Global sync failed: {e}')
 
 
 @bot.command(name='sync')
@@ -68,11 +60,10 @@ async def sync_commands(ctx):
             except Exception as e:
                 print(f'❌ Reload failed for {cog}: {e}')
         
-        # Sync commands
-        bot.tree.copy_global_to(guild=ctx.guild)
-        guild_cmds = await bot.tree.sync(guild=ctx.guild)
-        names = ', '.join(f'/{c.name}' for c in guild_cmds)
-        await msg.edit(content=f'✅ Synced {len(guild_cmds)} command(s):\n{names}')
+        # Sync commands globally
+        synced = await bot.tree.sync()
+        names = ', '.join(f'/{c.name}' for c in synced)
+        await msg.edit(content=f'✅ Synced {len(synced)} global command(s):\n{names}')
     except Exception as e:
         await msg.edit(content=f'❌ Sync failed: {e}')
 

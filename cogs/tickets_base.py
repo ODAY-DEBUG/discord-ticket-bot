@@ -373,7 +373,7 @@ class TicketsBase(commands.Cog):
         await interaction.response.send_message(embed=embed, view=SupportPanelView())
 
     @app_commands.command(name="rename", description="Rename the current ticket channel")
-    @app_commands.describe(new_name="New channel name (replaces current name entirely, prefix is kept)")
+    @app_commands.describe(new_name="New channel name (replaces everything after the prefix)")
     @staff_only()
     async def rename(self, interaction: discord.Interaction, new_name: str):
         ch = interaction.channel
