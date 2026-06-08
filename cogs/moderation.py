@@ -3,38 +3,11 @@ from discord.ext import commands
 from discord import app_commands
 from datetime import datetime, timezone, timedelta
 from collections import defaultdict
-
-# ---------------------------------------------------------------------------
-# Config — adjust role names to match your server
-# ---------------------------------------------------------------------------
-
-STAFF_ROLE  = "Staff"
-MOD_ROLE    = "Moderator"   # optional second mod role
-LOG_CHANNEL = "mod-logs"    # channel name where actions are logged
+from config import LOG_CHANNEL, mod_only
 
 # In-memory warning store  { guild_id: { user_id: [ {reason, mod, ts}, ... ] } }
 # Resets on bot restart. Replace with a DB if you need persistence.
 _warnings: dict[int, dict[int, list]] = defaultdict(lambda: defaultdict(list))
-
-
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
-def _has_mod(interaction: discord.Interaction) -> bool:
-    for name in (STAFF_ROLE, MOD_ROLE):
-        role = discord.utils.get(interaction.guild.roles, name=name)
-        if role and role in interaction.user.roles:
-            return True
-    return interaction.user.guild_permissions.administrator
-
-
-def _mod_check():
-    async def predicate(interaction: discord.Interaction) -> bool:
-        if _has_mod(interaction):
-            return True
-        raise app_commands.CheckFailure("❌ You need the Moderator or Staff role.")
-    return app_commands.check(predicate)
 
 
 async def _log(interaction: discord.Interaction, embed: discord.Embed):
@@ -100,7 +73,7 @@ class Moderation(commands.Cog):
         duration="Duration in minutes (default 10)",
         reason="Reason for the mute",
     )
-    @_mod_check()
+    @mod_only()
     async def mute(
         self,
         interaction: discord.Interaction,
@@ -141,7 +114,7 @@ class Moderation(commands.Cog):
 
     @app_commands.command(name="unmute", description="Remove a timeout from a member")
     @app_commands.describe(member="Member to unmute", reason="Reason")
-    @_mod_check()
+    @mod_only()
     async def unmute(
         self,
         interaction: discord.Interaction,
@@ -173,7 +146,7 @@ class Moderation(commands.Cog):
 
     @app_commands.command(name="kick", description="Kick a member from the server")
     @app_commands.describe(member="Member to kick", reason="Reason")
-    @_mod_check()
+    @mod_only()
     async def kick(
         self,
         interaction: discord.Interaction,
@@ -209,7 +182,7 @@ class Moderation(commands.Cog):
         reason="Reason",
         delete_days="Days of messages to delete (0-7, default 0)",
     )
-    @_mod_check()
+    @mod_only()
     async def ban(
         self,
         interaction: discord.Interaction,
@@ -245,7 +218,7 @@ class Moderation(commands.Cog):
 
     @app_commands.command(name="unban", description="Unban a user by their ID")
     @app_commands.describe(user_id="The user's Discord ID", reason="Reason")
-    @_mod_check()
+    @mod_only()
     async def unban(
         self,
         interaction: discord.Interaction,
@@ -280,7 +253,7 @@ class Moderation(commands.Cog):
 
     @app_commands.command(name="warn", description="Issue a warning to a member")
     @app_commands.describe(member="Member to warn", reason="Reason for the warning")
-    @_mod_check()
+    @mod_only()
     async def warn(
         self,
         interaction: discord.Interaction,
@@ -315,7 +288,7 @@ class Moderation(commands.Cog):
 
     @app_commands.command(name="warnings", description="View warnings for a member")
     @app_commands.describe(member="Member to check")
-    @_mod_check()
+    @mod_only()
     async def warnings(self, interaction: discord.Interaction, member: discord.Member):
         entries = _warnings[interaction.guild.id][member.id]
 
@@ -345,7 +318,7 @@ class Moderation(commands.Cog):
 
     @app_commands.command(name="clearwarnings", description="Clear all warnings for a member")
     @app_commands.describe(member="Member to clear warnings for")
-    @_mod_check()
+    @mod_only()
     async def clearwarnings(self, interaction: discord.Interaction, member: discord.Member):
         count = len(_warnings[interaction.guild.id][member.id])
         if count == 0:
@@ -373,7 +346,7 @@ class Moderation(commands.Cog):
         amount="Number of messages to delete (1–100)",
         member="Only delete messages from this member (optional)",
     )
-    @_mod_check()
+    @mod_only()
     async def purge(
         self,
         interaction: discord.Interaction,
@@ -413,7 +386,7 @@ class Moderation(commands.Cog):
 
     @app_commands.command(name="lock", description="Lock the channel so only Staff can send messages")
     @app_commands.describe(reason="Reason for locking")
-    @_mod_check()
+    @mod_only()
     async def lock(self, interaction: discord.Interaction, reason: str = "No reason provided."):
         channel = interaction.channel
         staff_role = discord.utils.get(interaction.guild.roles, name=STAFF_ROLE)
@@ -457,7 +430,7 @@ class Moderation(commands.Cog):
 
     @app_commands.command(name="unlock", description="Unlock the channel so everyone can send messages again")
     @app_commands.describe(reason="Reason for unlocking")
-    @_mod_check()
+    @mod_only()
     async def unlock(self, interaction: discord.Interaction, reason: str = "No reason provided."):
         channel = interaction.channel
         everyone = interaction.guild.default_role

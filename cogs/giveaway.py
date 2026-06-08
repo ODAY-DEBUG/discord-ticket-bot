@@ -7,13 +7,7 @@ import json
 import os
 import random
 from typing import Optional, List
-
-# ---------------------------------------------------------------------------
-# Config
-# ---------------------------------------------------------------------------
-
-GIVEAWAYS_FILE = "giveaways.json"
-STAFF_ROLE = "Staff"
+from config import GIVEAWAYS_FILE, STAFF_ROLE
 
 # ---------------------------------------------------------------------------
 # Helper

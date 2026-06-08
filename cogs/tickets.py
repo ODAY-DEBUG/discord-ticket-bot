@@ -3,38 +3,11 @@ from discord.ext import commands
 from discord import app_commands
 import asyncio
 from datetime import datetime, timezone
-
-STAFF_ROLE = "Staff"
-BASE_BUYING_ROLE = "Base Seller"
-BEDROCK_ROLE = "Bedrock Seller"
-SPAWNER_ROLE = "Spawner Trader"
-BUILDING_ROLE = "Builder"
-
-SELLER_ROLES = [BASE_BUYING_ROLE, BEDROCK_ROLE, SPAWNER_ROLE, BUILDING_ROLE]
-
-# All recognised ticket-channel prefixes
-TICKET_PREFIXES = ("ticket-", "claimed-", "claim-")
-
-
-# ---------------------------------------------------------------------------
-# Permission checks
-# ---------------------------------------------------------------------------
-
-def is_staff():
-    async def predicate(interaction: discord.Interaction) -> bool:
-        staff_role = discord.utils.get(interaction.guild.roles, name=STAFF_ROLE)
-        if staff_role and staff_role in interaction.user.roles:
-            return True
-        raise app_commands.CheckFailure("❌ Staff only!")
-    return app_commands.check(predicate)
-
-
-def is_admin():
-    async def predicate(interaction: discord.Interaction) -> bool:
-        if interaction.user.guild_permissions.administrator:
-            return True
-        raise app_commands.CheckFailure("❌ Admins only!")
-    return app_commands.check(predicate)
+from config import (
+    STAFF_ROLE, SELLER_ROLES, TICKET_PREFIXES,
+    BASE_BUYING_ROLE, BEDROCK_ROLE, SPAWNER_ROLE, BUILDING_ROLE,
+    staff_only, admin_only,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -294,7 +267,7 @@ class Tickets(commands.Cog):
     # ------------------------------------------------------------------
 
     @app_commands.command(name="ticketpanel", description="Post the ticket panel in this channel")
-    @is_admin()
+    @admin_only()
     async def ticketpanel(self, interaction: discord.Interaction):
         async for msg in interaction.channel.history(limit=20):
             if msg.author == self.bot.user:
@@ -323,7 +296,7 @@ class Tickets(commands.Cog):
 
     @app_commands.command(name="rename", description="Rename the current ticket channel")
     @app_commands.describe(new_name="New name for the ticket (no spaces needed)")
-    @is_staff()
+    @staff_only()
     async def rename(self, interaction: discord.Interaction, new_name: str):
         ch = interaction.channel
         prefix = None
@@ -345,7 +318,7 @@ class Tickets(commands.Cog):
 
     @app_commands.command(name="add", description="Add a user to the current ticket")
     @app_commands.describe(member="The member to add")
-    @is_staff()
+    @staff_only()
     async def add(self, interaction: discord.Interaction, member: discord.Member):
         await interaction.channel.set_permissions(
             member, read_messages=True, send_messages=True,
@@ -355,7 +328,7 @@ class Tickets(commands.Cog):
 
     @app_commands.command(name="remove", description="Remove a user from the current ticket")
     @app_commands.describe(member="The member to remove")
-    @is_staff()
+    @staff_only()
     async def remove(self, interaction: discord.Interaction, member: discord.Member):
         if member == interaction.user:
             await interaction.response.send_message("❌ You can't remove yourself!", ephemeral=True)
