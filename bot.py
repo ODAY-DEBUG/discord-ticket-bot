@@ -15,6 +15,7 @@ intents.guilds = True
 COGS = [
     'cogs.moderation',
     'cogs.giveaway',
+    'cogs.sticky',
     'cogs.tickets_base',
     'cogs.tickets_base_buying',
     'cogs.tickets_bedrock',
