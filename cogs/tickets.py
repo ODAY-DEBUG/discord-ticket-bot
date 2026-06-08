@@ -3,7 +3,7 @@ from discord.ext import commands
 from discord import app_commands
 import asyncio
 from datetime import datetime, timezone
-from config import (
+from cogs.config import (
     STAFF_ROLE, SELLER_ROLES, TICKET_PREFIXES,
     BASE_BUYING_ROLE, BEDROCK_ROLE, SPAWNER_ROLE, BUILDING_ROLE,
     staff_only, admin_only,

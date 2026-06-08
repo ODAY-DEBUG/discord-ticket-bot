@@ -7,7 +7,7 @@ import json
 import os
 import random
 from typing import Optional, List
-from config import GIVEAWAYS_FILE, STAFF_ROLE
+from cogs.config import GIVEAWAYS_FILE, STAFF_ROLE
 
 # ---------------------------------------------------------------------------
 # Helper
