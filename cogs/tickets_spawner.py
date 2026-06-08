@@ -1,10 +1,10 @@
 from discord.ext import commands
-from cogs.config import STAFF_ROLE, SPAWNER_ROLE
+from cogs.config import TRUSTED_STAFF_ROLE, SPAWNER_ROLE  # <-- Changed import
 
 SPAWNER_CFG = {
     "cat":   "Spawner Trading",
-    "ping":  [STAFF_ROLE, SPAWNER_ROLE],
-    "allow": [STAFF_ROLE, SPAWNER_ROLE],
+    "ping":  [TRUSTED_STAFF_ROLE, SPAWNER_ROLE],  # <-- Changed from STAFF_ROLE
+    "allow": [TRUSTED_STAFF_ROLE, SPAWNER_ROLE],  # <-- Changed from STAFF_ROLE
     "color": 0xf1c40f,
     "emoji": "🔄",
     "q": [

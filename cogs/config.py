@@ -13,6 +13,7 @@ from discord import app_commands
 STAFF_ROLE      = "Staff"
 MOD_ROLE        = "Moderator"
 ADMIN_ROLE      = "Admin"          # Optional extra admin role
+TRUSTED_STAFF_ROLE = "Trusted Staff" # Restricted access for specific tickets
 
 # Ticket seller roles
 BASE_BUYING_ROLE  = "Base Seller"
