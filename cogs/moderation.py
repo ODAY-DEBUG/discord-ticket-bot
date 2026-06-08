@@ -13,7 +13,22 @@ from cogs.config import STAFF_ROLE, LOG_CHANNEL, mod_only
 
 WARNINGS_FILE = "warnings.json"
 
-# In-memory warning store  { guild_id: { user_id: [ {reason, mod, ts}, ... ] } }
+import discord
+from discord.ext import commands
+from discord import app_commands
+from datetime import datetime, timezone, timedelta
+from collections import defaultdict
+import json
+import os
+from cogs.config import STAFF_ROLE, LOG_CHANNEL, mod_only
+
+# ---------------------------------------------------------------------------
+# Persistence for Warnings
+# ---------------------------------------------------------------------------
+
+WARNINGS_FILE = "warnings.json"
+
+# In-memory warning store
 _warnings: dict[int, dict[int, list]] = defaultdict(lambda: defaultdict(list))
 
 def load_warnings():
@@ -31,21 +46,24 @@ def load_warnings():
 
 def save_warnings():
     try:
-        # Convert integer keys to strings for JSON compatibility
         data = {}
         for guild_id, guild_data in _warnings.items():
             data[str(guild_id)] = {}
             for user_id, user_warns in guild_data.items():
                 data[str(guild_id)][str(user_id)] = user_warns
         
+        # DEBUG: Print exactly where it's trying to save
+        print(f"💾 [DEBUG] Attempting to save warnings to: {os.path.abspath(WARNINGS_FILE)}")
+        
         with open(WARNINGS_FILE, 'w') as f:
             json.dump(data, f, indent=2)
+            
+        print("✅ [DEBUG] Warnings saved successfully!")
     except Exception as e:
         print(f"❌ Failed to save warnings: {e}")
 
 # Load warnings on startup
 load_warnings()
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------

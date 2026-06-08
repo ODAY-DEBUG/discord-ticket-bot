@@ -11,7 +11,7 @@ from cogs.config import staff_only
 
 STICKIES_FILE = "stickies.json"
 
-# In-memory store: { channel_id: { "message_id": int, "content": str } }
+# In-memory store
 _stickies: dict[int, dict] = {}
 
 def load_stickies():
@@ -28,10 +28,15 @@ def load_stickies():
 
 def save_stickies():
     try:
-        # Convert integer keys to strings for JSON compatibility
         data = {str(channel_id): sticky_data for channel_id, sticky_data in _stickies.items()}
+        
+        # DEBUG: Print exactly where it's trying to save
+        print(f"💾 [DEBUG] Attempting to save stickies to: {os.path.abspath(STICKIES_FILE)}")
+        
         with open(STICKIES_FILE, 'w') as f:
             json.dump(data, f, indent=2)
+            
+        print("✅ [DEBUG] Stickies saved successfully!")
     except Exception as e:
         print(f"❌ Failed to save stickies: {e}")
 
