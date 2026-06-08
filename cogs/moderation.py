@@ -3,67 +3,39 @@ from discord.ext import commands
 from discord import app_commands
 from datetime import datetime, timezone, timedelta
 from collections import defaultdict
-import json
-import os
 from cogs.config import STAFF_ROLE, LOG_CHANNEL, mod_only
 
 # ---------------------------------------------------------------------------
-# Persistence for Warnings
+# Persistence for Warnings (MongoDB)
 # ---------------------------------------------------------------------------
 
-WARNINGS_FILE = "warnings.json"
-
-import discord
-from discord.ext import commands
-from discord import app_commands
-from datetime import datetime, timezone, timedelta
-from collections import defaultdict
-import json
-import os
-from cogs.config import STAFF_ROLE, LOG_CHANNEL, mod_only
-
-# ---------------------------------------------------------------------------
-# Persistence for Warnings
-# ---------------------------------------------------------------------------
-
-WARNINGS_FILE = "warnings.json"
-
-# In-memory warning store
+# In-memory warning store  { guild_id: { user_id: [ {reason, mod, ts}, ... ] } }
 _warnings: dict[int, dict[int, list]] = defaultdict(lambda: defaultdict(list))
 
-def load_warnings():
+def load_warnings(db):
     global _warnings
-    if os.path.exists(WARNINGS_FILE):
-        try:
-            with open(WARNINGS_FILE, 'r') as f:
-                data = json.load(f)
-                for guild_id_str, guild_data in data.items():
-                    for user_id_str, user_warns in guild_data.items():
-                        _warnings[int(guild_id_str)][int(user_id_str)] = user_warns
-            print(f"✅ Loaded warnings for {sum(len(v) for v in _warnings.values())} users")
-        except Exception as e:
-            print(f"❌ Failed to load warnings: {e}")
-
-def save_warnings():
     try:
-        data = {}
-        for guild_id, guild_data in _warnings.items():
-            data[str(guild_id)] = {}
-            for user_id, user_warns in guild_data.items():
-                data[str(guild_id)][str(user_id)] = user_warns
-        
-        # DEBUG: Print exactly where it's trying to save
-        print(f"💾 [DEBUG] Attempting to save warnings to: {os.path.abspath(WARNINGS_FILE)}")
-        
-        with open(WARNINGS_FILE, 'w') as f:
-            json.dump(data, f, indent=2)
-            
-        print("✅ [DEBUG] Warnings saved successfully!")
+        collection = db["warnings"]
+        for doc in collection.find():
+            guild_id = doc["guild_id"]
+            user_id = doc["user_id"]
+            _warnings[guild_id][user_id] = doc["warnings"]
+        print(f"✅ Loaded warnings from MongoDB")
     except Exception as e:
-        print(f"❌ Failed to save warnings: {e}")
+        print(f"❌ Failed to load warnings: {e}")
 
-# Load warnings on startup
-load_warnings()
+def save_user_warnings(db, guild_id: int, user_id: int, warnings_list: list):
+    try:
+        collection = db["warnings"]
+        collection.update_one(
+            {"guild_id": guild_id, "user_id": user_id},
+            {"$set": {"warnings": warnings_list}},
+            upsert=True
+        )
+    except Exception as e:
+        print(f"❌ Failed to save warnings to DB: {e}")
+
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -108,6 +80,8 @@ def _mod_embed(
 class Moderation(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
+        # Load warnings from MongoDB when the cog starts
+        load_warnings(self.bot.db)
 
     # Global error handler for this cog
     async def cog_app_command_error(
@@ -306,7 +280,7 @@ class Moderation(commands.Cog):
         await _log(interaction, embed)
 
     # ------------------------------------------------------------------
-    # /warn  (NOW SAVES TO JSON)
+    # /warn  (SAVES TO MONGODB)
     # ------------------------------------------------------------------
 
     @app_commands.command(name="warn", description="Issue a warning to a member")
@@ -324,7 +298,8 @@ class Moderation(commands.Cog):
             "ts":     datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC"),
         }
         _warnings[interaction.guild.id][member.id].append(entry)
-        save_warnings()  # <-- Save to file
+        save_user_warnings(self.bot.db, interaction.guild.id, member.id, _warnings[interaction.guild.id][member.id])
+        
         count = len(_warnings[interaction.guild.id][member.id])
 
         embed = _mod_embed("Warning", member, interaction.user, reason, 0xf1c40f,
@@ -372,7 +347,7 @@ class Moderation(commands.Cog):
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
     # ------------------------------------------------------------------
-    # /clearwarnings (NOW SAVES TO JSON)
+    # /clearwarnings  (SAVES TO MONGODB)
     # ------------------------------------------------------------------
 
     @app_commands.command(name="clearwarnings", description="Clear all warnings for a member")
@@ -385,7 +360,7 @@ class Moderation(commands.Cog):
             return
 
         _warnings[interaction.guild.id][member.id].clear()
-        save_warnings()  # <-- Save to file
+        save_user_warnings(self.bot.db, interaction.guild.id, member.id, [])
 
         embed = discord.Embed(
             title="🗑️ Warnings Cleared",

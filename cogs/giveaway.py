@@ -26,41 +26,48 @@ def ensure_aware(dt: datetime) -> datetime:
 # Data persistence
 # ---------------------------------------------------------------------------
 
+# ... (Keep imports, ensure_aware, Giveaway, WinnerClaimView, GiveawayButton, GiveawayView exactly the same) ...
+
 class GiveawayData:
-    def __init__(self):
+    def __init__(self, db):
+        self.db = db
         self.active_giveaways = {}
         self.load_data()
 
     def load_data(self):
-        if os.path.exists(GIVEAWAYS_FILE):
-            try:
-                with open(GIVEAWAYS_FILE, 'r') as f:
-                    data = json.load(f)
-                    for msg_id, giveaway_data in data.items():
-                        giveaway = Giveaway.from_dict(giveaway_data)
-                        self.active_giveaways[int(msg_id)] = giveaway
-                print(f"✅ Loaded {len(self.active_giveaways)} active giveaways")
-            except Exception as e:
-                print(f"❌ Failed to load giveaways: {e}")
+        try:
+            collection = self.db["giveaways"]
+            for doc in collection.find():
+                msg_id = doc["message_id"]
+                giveaway = Giveaway.from_dict(doc["giveaway_data"])
+                self.active_giveaways[msg_id] = giveaway
+            print(f"✅ Loaded {len(self.active_giveaways)} giveaways from MongoDB")
+        except Exception as e:
+            print(f"❌ Failed to load giveaways: {e}")
 
     def save_data(self):
-        try:
-            data = {}
-            for msg_id, giveaway in self.active_giveaways.items():
-                data[str(msg_id)] = giveaway.to_dict()
-            with open(GIVEAWAYS_FILE, 'w') as f:
-                json.dump(data, f, indent=2)
-        except Exception as e:
-            print(f"❌ Failed to save giveaways: {e}")
+        pass  # We save individually now, no need to save the whole file
 
     def add_giveaway(self, message_id: int, giveaway):
         self.active_giveaways[message_id] = giveaway
-        self.save_data()
+        try:
+            self.db["giveaways"].update_one(
+                {"message_id": message_id},
+                {"$set": {"giveaway_data": giveaway.to_dict()}},
+                upsert=True
+            )
+        except Exception as e:
+            print(f"❌ Failed to add giveaway to DB: {e}")
 
     def remove_giveaway(self, message_id: int):
         if message_id in self.active_giveaways:
             del self.active_giveaways[message_id]
-            self.save_data()
+        try:
+            self.db["giveaways"].delete_one({"message_id": message_id})
+        except Exception as e:
+            print(f"❌ Failed to remove giveaway from DB: {e}")
+
+# ... (Inside the Giveaways cog __init__, change: self.giveaway_data = GiveawayData(self.bot.db)) ...
 
 
 # ---------------------------------------------------------------------------
@@ -379,7 +386,7 @@ class GiveawayView(discord.ui.View):
 class Giveaways(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
-        self.giveaway_data = GiveawayData()
+        self.giveaway_data = GiveawayData(self.bot.db)
 
         # Restore persistent views on startup
         for msg_id, giveaway in self.giveaway_data.active_giveaways.items():
