@@ -571,7 +571,7 @@ class Giveaways(commands.Cog):
         await self.end_giveaway(msg_id, giveaway)
         await interaction.response.send_message("✅ Giveaway ended!", ephemeral=True)
 
-        @app_commands.command(name="reroll", description="Reroll a giveaway winner (Admin only)")
+    @app_commands.command(name="reroll", description="Reroll a giveaway winner (Admin only)")
     @app_commands.describe(message_id="The message ID of the ORIGINAL giveaway")
     async def reroll_giveaway(self, interaction: discord.Interaction, message_id: str):
         if not interaction.user.guild_permissions.administrator:
