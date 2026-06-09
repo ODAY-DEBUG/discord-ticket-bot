@@ -571,7 +571,7 @@ class Giveaways(commands.Cog):
         await self.end_giveaway(msg_id, giveaway)
         await interaction.response.send_message("✅ Giveaway ended!", ephemeral=True)
 
-    @app_commands.command(name="reroll", description="Reroll a giveaway winner (Admin only)")
+        @app_commands.command(name="reroll", description="Reroll a giveaway winner (Admin only)")
     @app_commands.describe(message_id="The message ID of the ORIGINAL giveaway")
     async def reroll_giveaway(self, interaction: discord.Interaction, message_id: str):
         if not interaction.user.guild_permissions.administrator:
@@ -595,7 +595,7 @@ class Giveaways(commands.Cog):
             await interaction.followup.send("❌ This giveaway hasn't ended yet! Use `/endgiveaway` first.", ephemeral=True)
             return
 
-        # --- THE NEW CLAIM CHECK ---
+        # --- THE CLAIM CHECK ---
         if giveaway.claimed_users:
             claimers = [f"<@{uid}>" for uid in giveaway.claimed_users]
             await interaction.followup.send(
@@ -604,21 +604,34 @@ class Giveaways(commands.Cog):
             )
             return
 
-        if not giveaway.entries:
-            await interaction.followup.send("❌ There are no entries to reroll from!", ephemeral=True)
+        # --- EXCLUDE OLD WINNERS FROM THE POOL ---
+        eligible_entries = [uid for uid in set(giveaway.entries) if uid not in giveaway.winners]
+        
+        if not eligible_entries:
+            await interaction.followup.send("❌ There are no other entries to reroll from (everyone already won)!", ephemeral=True)
             return
 
-        # --- PERFORM THE REROLL ---
-        new_winners = giveaway.pick_winners()
-        giveaway.winners = new_winners
-        giveaway.claimed_users = set() # Reset claimed users for the new winners
-        giveaway.claim_end_time = datetime.now(timezone.utc) + timedelta(seconds=giveaway.claim_time_seconds)
-        self.giveaway_data.add_giveaway(msg_id, giveaway) # Save to DB
+        actual_winners_count = min(giveaway.winners_count, len(eligible_entries))
+        new_winners = random.sample(eligible_entries, actual_winners_count)
 
+        # --- DELETE THE OLD WINNER ANNOUNCEMENT ---
         channel = self.bot.get_channel(giveaway.channel_id)
         if not channel:
             await interaction.followup.send("❌ Giveaway channel not found.", ephemeral=True)
             return
+
+        if giveaway.announcement_message_id:
+            try:
+                old_announcement = await channel.fetch_message(giveaway.announcement_message_id)
+                await old_announcement.delete()
+            except (discord.NotFound, discord.Forbidden, discord.HTTPException):
+                pass # If it's already deleted or we lack perms, just ignore
+
+        # --- PERFORM THE REROLL ---
+        giveaway.winners = new_winners
+        giveaway.claimed_users = set() # Reset claimed users for the new winners
+        giveaway.claim_end_time = datetime.now(timezone.utc) + timedelta(seconds=giveaway.claim_time_seconds)
+        self.giveaway_data.add_giveaway(msg_id, giveaway) # Save to DB
 
         winner_mentions = [f"<@{w}>" for w in new_winners]
         announcement_embed = discord.Embed(
