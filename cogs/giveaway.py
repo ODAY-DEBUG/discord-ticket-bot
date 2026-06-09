@@ -203,13 +203,20 @@ class WinnerClaimView(discord.ui.View):
             await interaction.response.send_message("❌ You are not one of the giveaway winners!", ephemeral=True)
             return
 
-        # Check DB claimed users or runtime claimed users
         giveaway_obj = self.giveaway_data.active_giveaways.get(self.giveaway_message_id)
         if interaction.user.id in self.claimed_users or (giveaway_obj and interaction.user.id in giveaway_obj.claimed_users):
             await interaction.response.send_message("❌ You already claimed your prize!", ephemeral=True)
             return
 
-        await self.create_claim_ticket(interaction, interaction.user.id)
+        # DEFER THE INTERACTION! This gives us 15 minutes instead of 3 seconds.
+        await interaction.response.defer(ephemeral=True)
+
+        try:
+            await self.create_claim_ticket(interaction, interaction.user.id)
+        except Exception as e:
+            # If anything fails, it will tell you exactly what went wrong in Discord
+            print(f"ERROR CREATING CLAIM TICKET: {e}")
+            await interaction.followup.send(f"❌ An error occurred while creating your claim ticket: `{e}`", ephemeral=True)
 
     async def create_claim_ticket(self, interaction: discord.Interaction, winner_id: int):
         guild = interaction.guild
@@ -217,7 +224,7 @@ class WinnerClaimView(discord.ui.View):
 
         for channel in guild.text_channels:
             if channel.name == f"claim-{uname}":
-                await interaction.response.send_message(
+                await interaction.followup.send(
                     f"❌ You already have an open claim ticket: {channel.mention}", ephemeral=True,
                 )
                 return
@@ -273,16 +280,28 @@ class WinnerClaimView(discord.ui.View):
         if guild.icon:
             embed.set_thumbnail(url=guild.icon.url)
 
-        # FIXED IMPORT: Use tickets_base instead of tickets
-        from cogs.tickets_base import TicketView
-        view = TicketView()
-        await ticket.send(embed=embed, view=view)
+        # Safely try to import the TicketView
+        try:
+            from cogs.tickets_base import TicketView
+            view = TicketView()
+        except Exception as e:
+            print(f"Failed to import TicketView, using fallback: {e}")
+            view = discord.ui.View() # Fallback empty view so it doesn't crash
 
-        # Send the staff ping
+        # Safely try to send the embed
+        try:
+            await ticket.send(embed=embed, view=view)
+        except Exception as e:
+            print(f"Failed to send ticket embed: {e}")
+
+        # Safely try to send the staff ping
         if staff_role:
-            await ticket.send(
-                f"{staff_role.mention} New giveaway prize claim from {interaction.user.mention}!"
-            )
+            try:
+                await ticket.send(
+                    f"{staff_role.mention} New giveaway prize claim from {interaction.user.mention}!"
+                )
+            except Exception as e:
+                print(f"Failed to send ticket ping: {e}")
 
         self.claimed_users.add(winner_id)
         
@@ -292,10 +311,9 @@ class WinnerClaimView(discord.ui.View):
             giveaway_obj.claimed_users.add(winner_id)
             self.giveaway_data.add_giveaway(self.giveaway_message_id, giveaway_obj)
 
-        await interaction.response.send_message(
+        await interaction.followup.send(
             f"✅ Claim ticket created: {ticket.mention}", ephemeral=True
         )
-
 
 # ---------------------------------------------------------------------------
 # Giveaway Enter Button / View
