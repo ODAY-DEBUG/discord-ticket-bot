@@ -3,11 +3,9 @@ from discord.ext import commands, tasks
 from discord import app_commands
 import asyncio
 from datetime import datetime, timedelta, timezone
-import json
-import os
 import random
 from typing import Optional, List
-from cogs.config import GIVEAWAYS_FILE, STAFF_ROLE
+from cogs.config import STAFF_ROLE
 
 # ---------------------------------------------------------------------------
 # Helper
@@ -52,7 +50,7 @@ class GiveawayData:
                 upsert=True
             )
         except Exception as e:
-            print(f"❌ Failed to add giveaway to DB: {e}")
+            print(f"❌ Failed to save giveaway to DB: {e}")
 
     def remove_giveaway(self, message_id: int):
         if message_id in self.active_giveaways:
@@ -85,7 +83,7 @@ class Giveaway:
         self.winners = []
         self.announcement_message_id = None
         self.claim_end_time = None
-        self.claimed_users = set()  # <-- NOW PERSISTED!
+        self.claimed_users = set()
 
     def to_dict(self):
         return {
@@ -97,13 +95,13 @@ class Giveaway:
             'description': self.description,
             'host_id': self.host_id,
             'message_id': self.message_id,
-            'entries': self.entries,
+            'entries': self.entries,  # Entries are saved here!
             'ended': self.ended,
             'claim_time_seconds': self.claim_time_seconds,
             'winners': self.winners,
             'announcement_message_id': self.announcement_message_id,
             'claim_end_time': ensure_aware(self.claim_end_time).isoformat() if self.claim_end_time else None,
-            'claimed_users': list(self.claimed_users),  # <-- Save as list for JSON/Mongo
+            'claimed_users': list(self.claimed_users),
         }
 
     @classmethod
@@ -119,11 +117,11 @@ class Giveaway:
             message_id=data.get('message_id'),
             claim_time_seconds=data.get('claim_time_seconds', 600),
         )
-        giveaway.entries = data.get('entries', [])
+        giveaway.entries = data.get('entries', [])  # Entries are loaded back!
         giveaway.ended = data.get('ended', False)
         giveaway.winners = data.get('winners', [])
         giveaway.announcement_message_id = data.get('announcement_message_id')
-        giveaway.claimed_users = set(data.get('claimed_users', []))  # <-- Load back into set
+        giveaway.claimed_users = set(data.get('claimed_users', []))
 
         claim_end = data.get('claim_end_time')
         giveaway.claim_end_time = ensure_aware(datetime.fromisoformat(claim_end)) if claim_end else None
@@ -152,14 +150,14 @@ class Giveaway:
 class WinnerClaimView(discord.ui.View):
     def __init__(
         self,
-        giveaway_data: GiveawayData,  # <-- Added to allow DB saving on claim
+        giveaway_data: GiveawayData,
         winners: List[int],
         prize: str,
         giveaway_channel_id: int,
         giveaway_message_id: int,
         claim_end_time: datetime,
     ):
-        super().__init__(timeout=None)  # Persistent across bot restarts
+        super().__init__(timeout=None)
 
         self.giveaway_data = giveaway_data
         self.winners = winners
@@ -205,7 +203,9 @@ class WinnerClaimView(discord.ui.View):
             await interaction.response.send_message("❌ You are not one of the giveaway winners!", ephemeral=True)
             return
 
-        if interaction.user.id in self.claimed_users or interaction.user.id in self.giveaway_data.active_giveaways.get(self.giveaway_message_id, Giveaway(None, None, "", 0, "", "", 0)).claimed_users:
+        # Check DB claimed users or runtime claimed users
+        giveaway_obj = self.giveaway_data.active_giveaways.get(self.giveaway_message_id)
+        if interaction.user.id in self.claimed_users or (giveaway_obj and interaction.user.id in giveaway_obj.claimed_users):
             await interaction.response.send_message("❌ You already claimed your prize!", ephemeral=True)
             return
 
@@ -249,11 +249,18 @@ class WinnerClaimView(discord.ui.View):
             topic=f"Ticket by {interaction.user.name} | Prize Claim",
         )
 
+        # Build the proof link
+        giveaway_link = (
+            f"https://discord.com/channels/{guild.id}/"
+            f"{self.giveaway_channel_id}/{self.giveaway_message_id}"
+        )
+
         embed = discord.Embed(
             title="🎉 Prize Claim",
             description=(
                 f"### Welcome {interaction.user.mention}!\n\n"
                 f"**Prize:** {self.prize}\n\n"
+                f"🔗 **Proof/Original Giveaway:** [Click Here]({giveaway_link})\n\n"
                 f"Please wait for staff to process your claim.\n\n"
                 f"━━━━━━━━━━━━━━━━━━"
             ),
@@ -266,18 +273,12 @@ class WinnerClaimView(discord.ui.View):
         if guild.icon:
             embed.set_thumbnail(url=guild.icon.url)
 
-        from cogs.tickets import TicketView
+        # FIXED IMPORT: Use tickets_base instead of tickets
+        from cogs.tickets_base import TicketView
         view = TicketView()
         await ticket.send(embed=embed, view=view)
 
-        giveaway_link = (
-            f"https://discord.com/channels/{guild.id}/"
-            f"{self.giveaway_channel_id}/{self.giveaway_message_id}"
-        )
-        await ticket.send(
-            f"🔗 **Click here to see proof / original giveaway:** [Giveaway Message]({giveaway_link})"
-        )
-
+        # Send the staff ping
         if staff_role:
             await ticket.send(
                 f"{staff_role.mention} New giveaway prize claim from {interaction.user.mention}!"
@@ -285,7 +286,7 @@ class WinnerClaimView(discord.ui.View):
 
         self.claimed_users.add(winner_id)
         
-        # PERSIST THE CLAIM TO DATABASE SO REROLL KNOWS!
+        # PERSIST THE CLAIM TO DATABASE
         if self.giveaway_message_id in self.giveaway_data.active_giveaways:
             giveaway_obj = self.giveaway_data.active_giveaways[self.giveaway_message_id]
             giveaway_obj.claimed_users.add(winner_id)
@@ -316,6 +317,7 @@ class GiveawayButton(discord.ui.Button):
             return
 
         if self.giveaway.add_entry(interaction.user.id):
+            # SAVES TO DB IMMEDIATELY ON ENTRY! (Survives restarts)
             self.giveaway_data.add_giveaway(self.giveaway.message_id, self.giveaway)
             await interaction.response.send_message("✅ You have entered the giveaway! Good luck! 🎉", ephemeral=True)
             
@@ -625,13 +627,13 @@ class Giveaways(commands.Cog):
                 old_announcement = await channel.fetch_message(giveaway.announcement_message_id)
                 await old_announcement.delete()
             except (discord.NotFound, discord.Forbidden, discord.HTTPException):
-                pass # If it's already deleted or we lack perms, just ignore
+                pass
 
         # --- PERFORM THE REROLL ---
         giveaway.winners = new_winners
-        giveaway.claimed_users = set() # Reset claimed users for the new winners
+        giveaway.claimed_users = set()
         giveaway.claim_end_time = datetime.now(timezone.utc) + timedelta(seconds=giveaway.claim_time_seconds)
-        self.giveaway_data.add_giveaway(msg_id, giveaway) # Save to DB
+        self.giveaway_data.add_giveaway(msg_id, giveaway)
 
         winner_mentions = [f"<@{w}>" for w in new_winners]
         announcement_embed = discord.Embed(
