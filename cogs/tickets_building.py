@@ -194,8 +194,8 @@ async def create_builder_ticket(interaction: discord.Interaction, answers: dict)
         ign = answers.get("What is your IGN?", "N/A")
         budget = answers.get("What is your budget?", "N/A")
         base_type = answers.get("What type of base do you need?", "N/A")
-        requirements = answers.get("Do you have any specific requirements?", "None")
-        how_soon = answers.get("How soon do you need the base? (ASAP/Week/No rush)", "N/A")
+        requirements = answers.get("Any specific requirements?", "None") # NEW LABEL
+        how_soon = answers.get("How soon do you need the base?", "N/A") # NEW LABEL
         
         order_embed = discord.Embed(
             title="🛠️ New Builder Order",

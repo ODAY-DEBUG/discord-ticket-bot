@@ -154,9 +154,11 @@ class BuildingModal(discord.ui.Modal, title="🏗️ Building Ticket"):
     q1 = discord.ui.TextInput(label="What is your IGN?", style=discord.TextStyle.short, required=True)
     q2 = discord.ui.TextInput(label="What is your budget?", style=discord.TextStyle.short, required=True)
     q3 = discord.ui.TextInput(label="What type of base do you need?", style=discord.TextStyle.short, required=True)
-    q4 = discord.ui.TextInput(label="Do you understand payments go to .KYNGVAEL2? (Yes/No)", style=discord.TextStyle.short, required=True)
-    q5 = discord.ui.TextInput(label="Do you have any specific requirements?", style=discord.TextStyle.paragraph, required=False)
-    q6 = discord.ui.TextInput(label="How soon do you need the base? (ASAP/Week/No rush)", style=discord.TextStyle.short, required=True)
+    # Shortened this label to fit the 45 char limit
+    q4 = discord.ui.TextInput(label="Payments to .KYNGVAEL2? (Yes/No)", style=discord.TextStyle.short, required=True)
+    q5 = discord.ui.TextInput(label="Any specific requirements?", style=discord.TextStyle.paragraph, required=False)
+    # Shortened label, moved options to placeholder
+    q6 = discord.ui.TextInput(label="How soon do you need the base?", style=discord.TextStyle.short, required=True, placeholder="ASAP / Within a week / No rush")
 
     async def on_submit(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
