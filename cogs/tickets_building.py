@@ -9,7 +9,7 @@ from cogs.tickets_base import TicketView
 # ---------------------------------------------------------------------------
 
 class OrderClaimButton(discord.ui.Button):
-    def __init__(self, ticket_channel_id: int, creator_id: int):
+    def __init__(self, ticket_channel_id: int, creator_id: int, order_message_id: int = None, order_channel_id: int = None):
         super().__init__(
             label="🔨 Claim Order",
             style=discord.ButtonStyle.green,
@@ -17,8 +17,11 @@ class OrderClaimButton(discord.ui.Button):
         )
         self.ticket_channel_id = ticket_channel_id
         self.creator_id = creator_id
+        self.order_message_id = order_message_id
+        self.order_channel_id = order_channel_id
 
     async def callback(self, interaction: discord.Interaction):
+        # 1. Check if user has Builder role
         builder_role = discord.utils.get(interaction.guild.roles, name=BUILDING_ROLE)
         if not builder_role or builder_role not in interaction.user.roles:
             await interaction.response.send_message("❌ Only Builders can claim orders!", ephemeral=True)
@@ -29,35 +32,37 @@ class OrderClaimButton(discord.ui.Button):
             await interaction.response.send_message("❌ Ticket channel not found.", ephemeral=True)
             return
 
-        # Check if builder already applied
+        # 2. Strict "Apply Once" check using the embed footer
         async for msg in ticket_channel.history(limit=50):
-            if msg.components:
-                for row in msg.components:
-                    for child in row.children:
-                        if hasattr(child, 'custom_id') and child.custom_id == f"b_accept_{self.ticket_channel_id}_{interaction.user.id}":
-                            await interaction.response.send_message("❌ You have already applied for this order!", ephemeral=True)
-                            return
+            if msg.author == interaction.guild.me and msg.embeds:
+                for embed in msg.embeds:
+                    if embed.footer and embed.footer.text == f"Applicant ID: {interaction.user.id}":
+                        await interaction.response.send_message("❌ You have already applied for this order! (Even if denied, you cannot re-apply)", ephemeral=True)
+                        return
 
-        # Send application to the ticket channel
+        # 3. Send application to the ticket channel
         embed = discord.Embed(
             title="🛠️ Builder Application",
             description=f"{interaction.user.mention} wants to take this order!",
             color=0x2ecc71
         )
-        view = BuilderAcceptView(self.ticket_channel_id, interaction.user.id, self.creator_id)
+        # Hide their ID in the footer so we can enforce the "apply once" rule
+        embed.set_footer(text=f"Applicant ID: {interaction.user.id}")
+        
+        view = BuilderAcceptView(self.ticket_channel_id, interaction.user.id, self.creator_id, self.order_message_id, self.order_channel_id)
         await ticket_channel.send(embed=embed, view=view)
 
         await interaction.response.send_message("✅ Your application has been sent to the ticket!", ephemeral=True)
 
 
 class OrderClaimView(discord.ui.View):
-    def __init__(self, ticket_channel_id: int, creator_id: int):
+    def __init__(self, ticket_channel_id: int, creator_id: int, order_message_id: int = None, order_channel_id: int = None):
         super().__init__(timeout=None)
-        self.add_item(OrderClaimButton(ticket_channel_id, creator_id))
+        self.add_item(OrderClaimButton(ticket_channel_id, creator_id, order_message_id, order_channel_id))
 
 
 class BuilderAcceptView(discord.ui.View):
-    def __init__(self, ticket_channel_id: int, builder_id: int, creator_id: int):
+    def __init__(self, ticket_channel_id: int, builder_id: int, creator_id: int, order_message_id: int = None, order_channel_id: int = None):
         super().__init__(timeout=None)
         
         accept_btn = discord.ui.Button(
@@ -80,52 +85,76 @@ class BuilderAcceptView(discord.ui.View):
         self.ticket_channel_id = ticket_channel_id
         self.builder_id = builder_id
         self.creator_id = creator_id
+        self.order_message_id = order_message_id
+        self.order_channel_id = order_channel_id
         
     async def accept_callback(self, interaction: discord.Interaction):
         if interaction.user.id != self.creator_id:
             return await interaction.response.send_message("❌ Only the ticket creator can accept!", ephemeral=True)
-        
-        # Acknowledge the button click to prevent "Interaction Failed"
+            
         await interaction.response.defer()
             
         ticket_channel = interaction.guild.get_channel(self.ticket_channel_id)
         builder = interaction.guild.get_member(self.builder_id)
         
         if ticket_channel and builder:
+            # Add builder to the ticket channel
             await ticket_channel.set_permissions(builder, read_messages=True, send_messages=True, read_message_history=True, attach_files=True)
             await ticket_channel.send(f"✅ {builder.mention} has been accepted for this order!")
             
-            # Delete all other builder application messages in this channel
+            # Edit ALL other builder applications in this ticket to "Order Claimed"
             async for msg in ticket_channel.history(limit=50):
                 if msg.author == interaction.guild.me and msg.id != interaction.message.id:
-                    if msg.components:
+                    if msg.embeds and msg.components:
                         for row in msg.components:
                             for child in row.children:
                                 if hasattr(child, 'custom_id') and child.custom_id and child.custom_id.startswith(f"b_accept_{self.ticket_channel_id}_"):
-                                    try: 
-                                        await msg.delete()
-                                    except: 
-                                        pass
+                                    new_embed = msg.embeds[0]
+                                    new_embed.color = discord.Color.dark_grey()
+                                    new_embed.title = "🛠️ Application (Order Claimed)"
+                                    try: await msg.edit(embed=new_embed, view=None)
+                                    except: pass
                                     break
 
-        # Delete the accepted application message
-        try:
-            await interaction.message.delete()
-        except:
-            pass
+            # Edit the accepted application message
+            try:
+                new_embed = interaction.message.embeds[0]
+                new_embed.color = discord.Color.green()
+                new_embed.title = "✅ Builder Accepted"
+                await interaction.message.edit(embed=new_embed, view=None)
+            except: pass
+
+            # Edit the ORIGINAL message in the Builder Orders channel
+            if self.order_channel_id and self.order_message_id:
+                orders_channel = interaction.guild.get_channel(self.order_channel_id)
+                if orders_channel:
+                    try:
+                        order_msg = await orders_channel.fetch_message(self.order_message_id)
+                        new_order_embed = order_msg.embeds[0] if order_msg.embeds else discord.Embed()
+                        new_order_embed.color = discord.Color.green()
+                        new_order_embed.title = "🛠️ Order Claimed"
+                        new_order_embed.add_field(name="Claimed By", value=builder.mention, inline=False)
+                        
+                        builder_role = discord.utils.get(interaction.guild.roles, name=BUILDING_ROLE)
+                        mention_str = builder_role.mention if builder_role else ""
+                        
+                        # Edit the message, remove the button, and ping @Builder
+                        await order_msg.edit(embed=new_order_embed, view=None, content=f"{mention_str} {builder.mention} claimed this order!")
+                    except: pass
 
     async def deny_callback(self, interaction: discord.Interaction):
         if interaction.user.id != self.creator_id:
             return await interaction.response.send_message("❌ Only the ticket creator can deny!", ephemeral=True)
         
-        # Acknowledge the button click to prevent "Interaction Failed"
         await interaction.response.defer()
             
-        # Delete the denied application message
+        # Edit the message to show denied, DO NOT delete so they can't re-apply
         try:
-            await interaction.message.delete()
-        except:
-            pass
+            new_embed = interaction.message.embeds[0]
+            new_embed.color = discord.Color.red()
+            new_embed.title = "❌ Builder Denied"
+            await interaction.message.edit(embed=new_embed, view=None)
+        except: pass
 
 
 # ---------------------------------------------------------------------------
@@ -209,8 +238,24 @@ async def create_builder_ticket(interaction: discord.Interaction, answers: dict)
         order_embed.add_field(name="How Soon?", value=how_soon, inline=True)
         order_embed.set_footer(text=f"Ticket: {channel.name}")
         
+        # Create view, send message, then update view with the message ID
         claim_view = OrderClaimView(channel.id, interaction.user.id)
-        await orders_channel.send(embed=order_embed, view=claim_view)
+        order_msg = await orders_channel.send(embed=order_embed, view=claim_view)
+        
+        # Pass the order message ID to the buttons so they can edit this message on accept
+        for item in claim_view.children:
+            if isinstance(item, OrderClaimButton):
+                item.order_message_id = order_msg.id
+                item.order_channel_id = orders_channel.id
+                
+        # Update the message with the fully configured view
+        await order_msg.edit(view=claim_view)
+
+        # Ping @Builder to alert them of the new order
+        builder_role = discord.utils.get(guild.roles, name=BUILDING_ROLE)
+        if builder_role:
+            await orders_channel.send(f"{builder_role.mention} New order available above! ⬆️")
+            
     else:
         print(f"❌ Builder Orders channel {BUILDER_ORDERS_CHANNEL_ID} not found!")
 
