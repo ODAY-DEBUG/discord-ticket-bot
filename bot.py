@@ -25,6 +25,9 @@ COGS = [
     'cogs.tickets_building',
     'cogs.tickets_support',
     'cogs.reactionroles',
+    'cogs.welcome',      # NEW
+    'cogs.automod',      # NEW
+    'cogs.logging',      # NEW
 ]
 
 
@@ -83,6 +86,24 @@ async def sync_commands(ctx):
         await msg.edit(content=f'✅ Synced {len(synced)} global command(s):\n{names}')
     except Exception as e:
         await msg.edit(content=f'❌ Sync failed: {e}')
+
+@bot.command(name='clearcommands')
+@commands.has_permissions(administrator=True)
+async def clear_commands(ctx):
+    msg = await ctx.send('🧹 Clearing all slash commands from Discord cache...')
+    try:
+        # Clear global commands
+        bot.tree.clear_commands(guild=None)
+        # Clear guild-specific commands
+        bot.tree.clear_commands(guild=ctx.guild)
+        
+        # Re-sync globally
+        synced = await bot.tree.sync()
+        names = ', '.join(f'/{c.name}' for c in synced)
+        await msg.edit(content=f'✅ Cleared cache and re-synced {len(synced)} global command(s):\n{names}\n\n*Note: It may take up to 1 hour for ghost commands to disappear from users clients, but they will be gone soon.*')
+    except Exception as e:
+        await msg.edit(content=f'❌ Clear failed: {e}')
+
 
 
 @bot.command(name='reload')

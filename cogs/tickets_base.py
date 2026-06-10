@@ -365,13 +365,18 @@ class TicketsBase(commands.Cog):
         else:
             await interaction.response.send_message(msg, ephemeral=True)
 
-    @app_commands.command(name="ticketpanel", description="Post the full ticket panel (all categories)")
+        @app_commands.command(name="ticketpanel", description="Post a ticket panel")
+    @app_commands.describe(panel="Which ticket panel to post?")
     @admin_only()
-    async def ticketpanel(self, interaction: discord.Interaction):
+    async def ticketpanel(self, interaction: discord.Interaction, panel: str):
         await _clear_bot_messages(interaction.channel, self.bot.user)
-        embed = discord.Embed(
-            title="🎫 Support Tickets",
-            description=(
+        embed = discord.Embed(color=0x2b2d31)
+        if interaction.guild.icon:
+            embed.set_thumbnail(url=interaction.guild.icon.url)
+
+        if panel == "all":
+            embed.title = "🎫 Support Tickets"
+            embed.description = (
                 "### Click a button below to open a ticket!\n\n"
                 "🏠 **Base Buying** — Purchase a base\n"
                 "🕳️ **Bedrock Hole** — Buy a bedrock hole\n"
@@ -379,56 +384,41 @@ class TicketsBase(commands.Cog):
                 "🏗️ **Building** — Building services\n"
                 "❓ **Support** — General help\n"
                 "⚠️ **Scam Report** — Report a scam"
-            ),
-            color=0x2b2d31,
-        )
-        if interaction.guild.icon:
-            embed.set_thumbnail(url=interaction.guild.icon.url)
-        await interaction.response.send_message(embed=embed, view=TicketPanelView())
+            )
+            await interaction.response.send_message(embed=embed, view=TicketPanelView())
+        elif panel == "base":
+            embed.title = "🏠 Base Buying"
+            embed.description = "Click the button below to open a **Base Buying** ticket."
+            embed.color = 0x2ecc71
+            await interaction.response.send_message(embed=embed, view=BaseBuyingPanelView())
+        elif panel == "bedrock":
+            embed.title = "🕳️ Bedrock Hole Buying"
+            embed.description = "Click the button below to open a **Bedrock Hole** ticket."
+            embed.color = 0x95a5a6
+            await interaction.response.send_message(embed=embed, view=BedrockPanelView())
+        elif panel == "spawner":
+            embed.title = "🔄 Spawner Trading"
+            embed.description = "Click the button below to open a **Spawner Trade** ticket."
+            embed.color = 0xf1c40f
+            await interaction.response.send_message(embed=embed, view=SpawnerPanelView())
+        elif panel == "building":
+            embed.title = "🏗️ Building"
+            embed.description = "Click the button below to open a **Building** ticket."
+            embed.color = 0x9b59b6
+            await interaction.response.send_message(embed=embed, view=BuildingPanelView())
+        elif panel == "support":
+            embed.title = "❓ Support & Reports"
+            embed.description = "Click a button below to open a ticket.\n\n❓ **Support** — General help\n⚠️ **Scam Report** — Report a scam"
+            embed.color = 0x3498db
+            await interaction.response.send_message(embed=embed, view=SupportPanelView())
+        else:
+            await interaction.response.send_message("❌ Invalid panel type.", ephemeral=True)
 
-    @app_commands.command(name="ticketpanel_basebuying", description="Post the Base Buying ticket panel")
-    @admin_only()
-    async def ticketpanel_basebuying(self, interaction: discord.Interaction):
-        await _clear_bot_messages(interaction.channel, self.bot.user)
-        embed = discord.Embed(title="🏠 Base Buying", description="Click the button below to open a **Base Buying** ticket.", color=0x2ecc71)
-        if interaction.guild.icon: embed.set_thumbnail(url=interaction.guild.icon.url)
-        await interaction.response.send_message(embed=embed, view=BaseBuyingPanelView())
-
-    @app_commands.command(name="ticketpanel_bedrock", description="Post the Bedrock Hole ticket panel")
-    @admin_only()
-    async def ticketpanel_bedrock(self, interaction: discord.Interaction):
-        await _clear_bot_messages(interaction.channel, self.bot.user)
-        embed = discord.Embed(title="🕳️ Bedrock Hole Buying", description="Click the button below to open a **Bedrock Hole** ticket.", color=0x95a5a6)
-        if interaction.guild.icon: embed.set_thumbnail(url=interaction.guild.icon.url)
-        await interaction.response.send_message(embed=embed, view=BedrockPanelView())
-
-    @app_commands.command(name="ticketpanel_spawner", description="Post the Spawner Trading ticket panel")
-    @admin_only()
-    async def ticketpanel_spawner(self, interaction: discord.Interaction):
-        await _clear_bot_messages(interaction.channel, self.bot.user)
-        embed = discord.Embed(title="🔄 Spawner Trading", description="Click the button below to open a **Spawner Trade** ticket.", color=0xf1c40f)
-        if interaction.guild.icon: embed.set_thumbnail(url=interaction.guild.icon.url)
-        await interaction.response.send_message(embed=embed, view=SpawnerPanelView())
-
-    @app_commands.command(name="ticketpanel_building", description="Post the Building ticket panel")
-    @admin_only()
-    async def ticketpanel_building(self, interaction: discord.Interaction):
-        await _clear_bot_messages(interaction.channel, self.bot.user)
-        embed = discord.Embed(title="🏗️ Building", description="Click the button below to open a **Building** ticket.", color=0x9b59b6)
-        if interaction.guild.icon: embed.set_thumbnail(url=interaction.guild.icon.url)
-        await interaction.response.send_message(embed=embed, view=BuildingPanelView())
-
-    @app_commands.command(name="ticketpanel_support", description="Post the Support & Scam Report ticket panel")
-    @admin_only()
-    async def ticketpanel_support(self, interaction: discord.Interaction):
-        await _clear_bot_messages(interaction.channel, self.bot.user)
-        embed = discord.Embed(
-            title="❓ Support & Reports",
-            description="Click a button below to open a ticket.\n\n❓ **Support** — General help\n⚠️ **Scam Report** — Report a scam",
-            color=0x3498db,
-        )
-        if interaction.guild.icon: embed.set_thumbnail(url=interaction.guild.icon.url)
-        await interaction.response.send_message(embed=embed, view=SupportPanelView())
+    # This tells Discord to show a dropdown menu for the "panel" parameter
+    @ticketpanel.autocomplete('panel')
+    async def panel_autocomplete(self, interaction: discord.Interaction, current: str):
+        options = ["all", "base", "bedrock", "spawner", "building", "support"]
+        return [app_commands.Choice(name=opt, value=opt) for opt in options if current.lower() in opt]
 
     @app_commands.command(name="close", description="Close the current ticket")
     async def close(self, interaction: discord.Interaction):
