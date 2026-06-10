@@ -153,35 +153,24 @@ class SpawnerModal(discord.ui.Modal, title="🔄 Spawner Trading Ticket"):
 class BuildingModal(discord.ui.Modal, title="🏗️ Building Ticket"):
     q1 = discord.ui.TextInput(label="What is your IGN?", style=discord.TextStyle.short, required=True)
     q2 = discord.ui.TextInput(label="What is your budget?", style=discord.TextStyle.short, required=True)
-    q3 = discord.ui.TextInput(label="What base do you need?", style=discord.TextStyle.short, required=True)
-    q4 = discord.ui.TextInput(label="Payments to .KYNGVAEL2? (Yes/No)", style=discord.TextStyle.short, required=True)
-    q5 = discord.ui.TextInput(label="Specific requirements?", style=discord.TextStyle.paragraph, required=False)
-    q6 = discord.ui.TextInput(label="How soon do you need it?", style=discord.TextStyle.short, required=True, placeholder="ASAP / Within a week / No rush")
+    q3 = discord.ui.TextInput(label="What type of base do you need?", style=discord.TextStyle.short, required=True)
+    q4 = discord.ui.TextInput(label="Do you have any specific requirements?", style=discord.TextStyle.paragraph, required=False)
+    q5 = discord.ui.TextInput(label="How soon do you need the base?", style=discord.TextStyle.short, required=True, placeholder="ASAP / Within a week / No rush")
 
     async def on_submit(self, interaction: discord.Interaction):
-        print("🏗️ BUILDING MODAL: Submit received!")
         await interaction.response.defer(ephemeral=True)
-        print("🏗️ BUILDING MODAL: Interaction deferred!")
-        
         try:
-            print("🏗️ BUILDING MODAL: Attempting to import create_builder_ticket...")
             from cogs.tickets_building import create_builder_ticket
-            print("🏗️ BUILDING MODAL: Import successful! Creating ticket...")
-            
             await create_builder_ticket(interaction, {
                 self.q1.label: self.q1.value,
                 self.q2.label: self.q2.value,
                 self.q3.label: self.q3.value,
                 self.q4.label: self.q4.value,
                 self.q5.label: self.q5.value,
-                self.q6.label: self.q6.value,
             })
-            print("🏗️ BUILDING MODAL: Ticket created successfully!")
-            
         except Exception as e:
             print(f"❌ BUILDING MODAL CRASHED: {e}")
             await interaction.followup.send(f"❌ An error occurred creating your ticket: `{e}`", ephemeral=True)
-
 
 class SupportModal(discord.ui.Modal, title="❓ Support Ticket"):
     q1 = discord.ui.TextInput(label="What do you need help with?",              style=discord.TextStyle.short,     required=True)
