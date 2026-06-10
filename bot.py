@@ -25,11 +25,11 @@ COGS = [
     'cogs.tickets_building',
     'cogs.tickets_support',
     'cogs.reactionroles',
-    'cogs.welcome',      # NEW
-    'cogs.automod',      # NEW
-    'cogs.logging',      # NEW
+    'cogs.welcome',
+    'cogs.automod',
+    'cogs.logging',
+    'cogs.autorole',      # <-- ADD THIS
 ]
-
 
 class Bot(commands.Bot):
     async def setup_hook(self):
