@@ -365,7 +365,7 @@ class TicketsBase(commands.Cog):
         else:
             await interaction.response.send_message(msg, ephemeral=True)
 
-        @app_commands.command(name="ticketpanel", description="Post a ticket panel")
+    @app_commands.command(name="ticketpanel", description="Post a ticket panel")
     @app_commands.describe(panel="Which ticket panel to post?")
     @admin_only()
     async def ticketpanel(self, interaction: discord.Interaction, panel: str):
