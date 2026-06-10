@@ -19,7 +19,6 @@ class OrderClaimButton(discord.ui.Button):
         self.creator_id = creator_id
 
     async def callback(self, interaction: discord.Interaction):
-        # 1. Check if user has Builder role
         builder_role = discord.utils.get(interaction.guild.roles, name=BUILDING_ROLE)
         if not builder_role or builder_role not in interaction.user.roles:
             await interaction.response.send_message("❌ Only Builders can claim orders!", ephemeral=True)
@@ -30,7 +29,7 @@ class OrderClaimButton(discord.ui.Button):
             await interaction.response.send_message("❌ Ticket channel not found.", ephemeral=True)
             return
 
-        # 2. Check if builder already applied
+        # Check if builder already applied
         async for msg in ticket_channel.history(limit=50):
             if msg.components:
                 for row in msg.components:
@@ -39,7 +38,7 @@ class OrderClaimButton(discord.ui.Button):
                             await interaction.response.send_message("❌ You have already applied for this order!", ephemeral=True)
                             return
 
-        # 3. Send application to the ticket channel
+        # Send application to the ticket channel
         embed = discord.Embed(
             title="🛠️ Builder Application",
             description=f"{interaction.user.mention} wants to take this order!",
@@ -61,7 +60,6 @@ class BuilderAcceptView(discord.ui.View):
     def __init__(self, ticket_channel_id: int, builder_id: int, creator_id: int):
         super().__init__(timeout=None)
         
-        # Create dynamic buttons with the builder's ID in the custom_id
         accept_btn = discord.ui.Button(
             label="✅ Accept Builder",
             style=discord.ButtonStyle.green,
@@ -84,15 +82,16 @@ class BuilderAcceptView(discord.ui.View):
         self.creator_id = creator_id
         
     async def accept_callback(self, interaction: discord.Interaction):
-        # Only ticket creator can accept
         if interaction.user.id != self.creator_id:
             return await interaction.response.send_message("❌ Only the ticket creator can accept!", ephemeral=True)
+        
+        # Acknowledge the button click to prevent "Interaction Failed"
+        await interaction.response.defer()
             
         ticket_channel = interaction.guild.get_channel(self.ticket_channel_id)
         builder = interaction.guild.get_member(self.builder_id)
         
         if ticket_channel and builder:
-            # Add builder to the ticket channel
             await ticket_channel.set_permissions(builder, read_messages=True, send_messages=True, read_message_history=True, attach_files=True)
             await ticket_channel.send(f"✅ {builder.mention} has been accepted for this order!")
             
@@ -107,18 +106,26 @@ class BuilderAcceptView(discord.ui.View):
                                         await msg.delete()
                                     except: 
                                         pass
-                                    break # Move to next message
+                                    break
 
         # Delete the accepted application message
-        await interaction.message.delete()
+        try:
+            await interaction.message.delete()
+        except:
+            pass
 
     async def deny_callback(self, interaction: discord.Interaction):
-        # Only ticket creator can deny
         if interaction.user.id != self.creator_id:
             return await interaction.response.send_message("❌ Only the ticket creator can deny!", ephemeral=True)
+        
+        # Acknowledge the button click to prevent "Interaction Failed"
+        await interaction.response.defer()
             
-        # Just delete the denied application message
-        await interaction.message.delete()
+        # Delete the denied application message
+        try:
+            await interaction.message.delete()
+        except:
+            pass
 
 
 # ---------------------------------------------------------------------------
@@ -147,7 +154,8 @@ async def create_builder_ticket(interaction: discord.Interaction, answers: dict)
         guild.default_role: discord.PermissionOverwrite(read_messages=False),
         interaction.user: discord.PermissionOverwrite(read_messages=True, send_messages=True, read_message_history=True, attach_files=True),
     }
-    # Only add Owner role, NO Staff or Builder initially
+    
+    # Only add Owner role initially
     if owner_role:
         overwrites[owner_role] = discord.PermissionOverwrite(read_messages=True, send_messages=True, read_message_history=True, attach_files=True)
 
@@ -183,7 +191,6 @@ async def create_builder_ticket(interaction: discord.Interaction, answers: dict)
     # --- SEND ORDER TO ORDERS CHANNEL ---
     orders_channel = guild.get_channel(BUILDER_ORDERS_CHANNEL_ID)
     if orders_channel:
-        # Safely extract specific answers using the exact labels from the modal
         ign = answers.get("What is your IGN?", "N/A")
         budget = answers.get("What is your budget?", "N/A")
         base_type = answers.get("What type of base do you need?", "N/A")

@@ -160,16 +160,19 @@ class BuildingModal(discord.ui.Modal, title="🏗️ Building Ticket"):
 
     async def on_submit(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
-        # Import the custom builder creation function
-        from cogs.tickets_building import create_builder_ticket
-        await create_builder_ticket(interaction, {
-            self.q1.label: self.q1.value,
-            self.q2.label: self.q2.value,
-            self.q3.label: self.q3.value,
-            self.q4.label: self.q4.value,
-            self.q5.label: self.q5.value,
-            self.q6.label: self.q6.value,
-        })
+        try:
+            from cogs.tickets_building import create_builder_ticket
+            await create_builder_ticket(interaction, {
+                self.q1.label: self.q1.value,
+                self.q2.label: self.q2.value,
+                self.q3.label: self.q3.value,
+                self.q4.label: self.q4.value,
+                self.q5.label: self.q5.value,
+                self.q6.label: self.q6.value,
+            })
+        except Exception as e:
+            print(f"ERROR IN BUILDING MODAL: {e}")
+            await interaction.followup.send(f"❌ An error occurred creating your ticket: `{e}`", ephemeral=True)
 
 
 class SupportModal(discord.ui.Modal, title="❓ Support Ticket"):
