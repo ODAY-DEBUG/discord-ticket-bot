@@ -10,6 +10,10 @@ from discord import app_commands
 # Role names — match these exactly to your Discord server role names
 # ---------------------------------------------------------------------------
 
+# Add these lines anywhere above the permission check helpers:
+
+OWNER_ROLE = "👑 Owner"  # The only role (besides the creator) that sees builder tickets initially
+BUILDER_ORDERS_CHANNEL_ID = 1512866063833104384  # <-- REPLACE WITH YOUR ORDERS CHANNEL ID
 STAFF_ROLE      = "Staff"
 MOD_ROLE        = "Moderator"
 ADMIN_ROLE      = "Admin"          # Optional extra admin role

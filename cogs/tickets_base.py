@@ -151,17 +151,24 @@ class SpawnerModal(discord.ui.Modal, title="🔄 Spawner Trading Ticket"):
 
 
 class BuildingModal(discord.ui.Modal, title="🏗️ Building Ticket"):
-    q1 = discord.ui.TextInput(label="What do you need built?",  style=discord.TextStyle.paragraph, required=True)
-    q2 = discord.ui.TextInput(label="What is your budget?",     style=discord.TextStyle.short,     required=True)
-    q3 = discord.ui.TextInput(label="Do you have a deadline?",  style=discord.TextStyle.short,     required=False)
+    q1 = discord.ui.TextInput(label="What is your IGN?", style=discord.TextStyle.short, required=True)
+    q2 = discord.ui.TextInput(label="What is your budget?", style=discord.TextStyle.short, required=True)
+    q3 = discord.ui.TextInput(label="What type of base do you need?", style=discord.TextStyle.short, required=True)
+    q4 = discord.ui.TextInput(label="Do you understand payments go to .KYNGVAEL2? (Yes/No)", style=discord.TextStyle.short, required=True)
+    q5 = discord.ui.TextInput(label="Do you have any specific requirements?", style=discord.TextStyle.paragraph, required=False)
+    q6 = discord.ui.TextInput(label="How soon do you need the base? (ASAP/Week/No rush)", style=discord.TextStyle.short, required=True)
 
     async def on_submit(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
-        from cogs.tickets_building import BUILDING_CFG
-        await create_ticket_channel(interaction, BUILDING_CFG, "Building", {
+        # Import the custom builder creation function
+        from cogs.tickets_building import create_builder_ticket
+        await create_builder_ticket(interaction, {
             self.q1.label: self.q1.value,
             self.q2.label: self.q2.value,
             self.q3.label: self.q3.value,
+            self.q4.label: self.q4.value,
+            self.q5.label: self.q5.value,
+            self.q6.label: self.q6.value,
         })
 
 
