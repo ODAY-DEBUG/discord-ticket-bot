@@ -7,7 +7,7 @@ import discord
 from discord import app_commands
 
 # ---------------------------------------------------------------------------
-# Default Fallback Role names (Used if not overridden on the website)
+# Default Fallback Role names & Channels (Used if not overridden on the website)
 # ---------------------------------------------------------------------------
 
 DEFAULT_STAFF_ROLE      = "Staff"
@@ -15,16 +15,25 @@ DEFAULT_MOD_ROLE        = "Moderator"
 DEFAULT_ADMIN_ROLE      = "Admin"          
 DEFAULT_TRUSTED_STAFF_ROLE = "Trusted Staff" 
 
-# Ticket seller roles (Not currently on dashboard, kept in code)
+# Ticket seller roles & Builder roles (Needed for Cogs)
 BASE_BUYING_ROLE  = "Base Seller"
 BEDROCK_ROLE      = "Bedrock Seller"
 SPAWNER_ROLE      = "Spawner Trader"
 BUILDING_ROLE     = "Builder"
+OWNER_ROLE        = "👑 Owner"
 
 SELLER_ROLES = [BASE_BUYING_ROLE, BEDROCK_ROLE, SPAWNER_ROLE, BUILDING_ROLE]
 
+# Channel names & IDs (Needed for Cogs)
+LOG_CHANNEL = "mod-logs"
+BUILDER_ORDERS_CHANNEL_ID = 1512866063833104384 # Make sure this is your builder orders channel ID
+
 # Ticket channel prefixes
 TICKET_PREFIXES = ("ticket-", "claimed-", "claim-")
+
+# Giveaway settings fallback
+GIVEAWAYS_FILE = "giveaways.json"
+
 
 # ---------------------------------------------------------------------------
 # Dynamic Config Loader (Reads from MongoDB Dashboard)
