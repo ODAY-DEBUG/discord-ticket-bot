@@ -15,6 +15,12 @@ DEFAULT_MOD_ROLE        = "Moderator"
 DEFAULT_ADMIN_ROLE      = "Admin"          
 DEFAULT_TRUSTED_STAFF_ROLE = "Trusted Staff" 
 
+# Aliases so the other cogs don't break their imports!
+STAFF_ROLE      = DEFAULT_STAFF_ROLE
+MOD_ROLE        = DEFAULT_MOD_ROLE
+ADMIN_ROLE      = DEFAULT_ADMIN_ROLE
+TRUSTED_STAFF_ROLE = DEFAULT_TRUSTED_STAFF_ROLE
+
 # Ticket seller roles & Builder roles (Needed for Cogs)
 BASE_BUYING_ROLE  = "Base Seller"
 BEDROCK_ROLE      = "Bedrock Seller"
@@ -26,7 +32,7 @@ SELLER_ROLES = [BASE_BUYING_ROLE, BEDROCK_ROLE, SPAWNER_ROLE, BUILDING_ROLE]
 
 # Channel names & IDs (Needed for Cogs)
 LOG_CHANNEL = "mod-logs"
-BUILDER_ORDERS_CHANNEL_ID = 1512866063833104384 # Make sure this is your builder orders channel ID
+BUILDER_ORDERS_CHANNEL_ID = 1512866063833104384 # Your builder orders channel ID
 
 # Ticket channel prefixes
 TICKET_PREFIXES = ("ticket-", "claimed-", "claim-")
