@@ -1,6 +1,5 @@
 import discord
 from discord.ext import commands
-from discord import app_commands
 from datetime import datetime, timezone
 from cogs.config import TRUSTED_STAFF_ROLE
 
@@ -25,66 +24,37 @@ class ApplyButton(discord.ui.Button):
         if not app_config or not app_config.get("is_open", False):
             return await interaction.response.send_message("❌ This application is closed right now.", ephemeral=True)
 
+        # Check if user already has an active session
+        existing_session = interaction.client.db["application_sessions"].find_one({"user_id": interaction.user.id})
+        if existing_session:
+            return await interaction.response.send_message("❌ You already have an active application in progress. Check your DMs!", ephemeral=True)
+
         try:
             dm_channel = await interaction.user.create_dm()
-            start_view = StartAppView(self.app_id, self.app_name, app_config.get("questions", []))
-            await dm_channel.send(f"**{self.app_name}**\nClick the button below to start your application.", view=start_view)
+            questions = app_config.get("questions", [])
+            if not questions:
+                return await interaction.response.send_message("❌ This application has no questions set up.", ephemeral=True)
+
+            # Start the DM conversation
+            await dm_channel.send(f"**Starting application for {app_config['app_name']}**\n\nYou can type `cancel` at any time to abort.\n\n**Question 1:** {questions[0]}")
+            
+            # Save session to MongoDB so we remember their progress
+            interaction.client.db["application_sessions"].insert_one({
+                "user_id": interaction.user.id,
+                "guild_id": interaction.guild.id,
+                "app_id": self.app_id,
+                "current_q": 0,
+                "answers": []
+            })
+            
             await interaction.response.send_message("✅ Check your DMs to start the application!", ephemeral=True)
         except discord.Forbidden:
-            await interaction.response.send_message("❌ I couldn't DM you! Please enable DMs from server members.", ephemeral=True)
+            await interaction.response.send_message("❌ I couldn't DM you! Please enable DMs from server members in your privacy settings.", ephemeral=True)
 
 class ApplyPanelView(discord.ui.View):
     def __init__(self, app_id: str, app_name: str):
         super().__init__(timeout=None)
         self.add_item(ApplyButton(app_id, app_name))
-
-class StartAppView(discord.ui.View):
-    def __init__(self, app_id: str, app_name: str, questions: list):
-        super().__init__(timeout=None)
-        self.app_id = app_id
-        self.app_name = app_name
-        self.questions = questions
-
-        btn = discord.ui.Button(label="Start Application", style=discord.ButtonStyle.green, custom_id=f"start_{app_id}", emoji="✍️")
-        btn.callback = self.start_callback
-        self.add_item(btn)
-
-    async def start_callback(self, interaction: discord.Interaction):
-        modal = ApplicationModal(self.app_id, self.app_name, self.questions)
-        await interaction.response.send_modal(modal)
-
-class ApplicationModal(discord.ui.Modal):
-    def __init__(self, app_id: str, app_name: str, questions: list):
-        super().__init__(title=f"{app_name} Application")
-        self.app_id = app_id
-        self.app_name = app_name
-        
-        for i, q in enumerate(questions[:5]):
-            setattr(self, f"q{i+1}", discord.ui.TextInput(label=q[:45], style=discord.TextStyle.paragraph, required=True))
-            self.add_item(getattr(self, f"q{i+1}"))
-
-    async def on_submit(self, interaction: discord.Interaction):
-        app_config = interaction.client.db["applications_config"].find_one({"app_id": self.app_id})
-        if not app_config: return await interaction.response.send_message("❌ Error finding application.", ephemeral=True)
-
-        submitted_channel = interaction.client.get_channel(app_config.get("submitted_channel_id"))
-        if not submitted_channel: return await interaction.response.send_message("❌ Submission channel not found.", ephemeral=True)
-
-        embed = discord.Embed(title=f"📄 New {self.app_name} Application", color=0x2b2d31, timestamp=datetime.now(timezone.utc))
-        embed.add_field(name="Applicant", value=f"{interaction.user.mention} (`{interaction.user.id}`)", inline=False)
-        embed.set_thumbnail(url=interaction.user.display_avatar.url)
-
-        questions = app_config.get("questions", [])
-        for i, q in enumerate(questions[:5]):
-            answer = getattr(self, f"q{i+1}", None)
-            if answer:
-                val = answer.value
-                if len(val) > 1024: val = val[:1021] + "..."
-                embed.add_field(name=q[:45], value=val, inline=False)
-
-        view = ApplicationActionView(self.app_id, interaction.user.id, app_config)
-        await submitted_channel.send(embed=embed, view=view)
-        await interaction.response.send_message("✅ Application submitted successfully!", ephemeral=True)
 
 class ApplicationActionView(discord.ui.View):
     def __init__(self, app_id: str, applicant_id: int, app_config: dict):
@@ -175,19 +145,87 @@ class ApplicationActionView(discord.ui.View):
 
 
 # ---------------------------------------------------------------------------
-# Cog
+# Cog & DM Listener
 # ---------------------------------------------------------------------------
 
 class Applications(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
-        # --- CRITICAL: Load buttons from DB so clicks don't fail ---
+        # Load Panel views on startup so buttons work
         try:
             for app in bot.db["applications_config"].find():
                 bot.add_view(ApplyPanelView(app["app_id"], app["app_name"]))
             print("✅ Loaded Application Panel views.")
         except Exception as e:
             print(f"❌ Failed to load application views: {e}")
+
+    @commands.Cog.listener()
+    async def on_message(self, message: discord.Message):
+        # Only listen to DMs from humans
+        if message.author.bot or message.guild is not None:
+            return
+
+        # Check for active application session in MongoDB
+        session = self.bot.db["application_sessions"].find_one({"user_id": message.author.id})
+        if not session:
+            return # Not in an application flow
+
+        content = message.content.strip()
+        
+        # Cancel command
+        if content.lower() == "cancel":
+            self.bot.db["application_sessions"].delete_one({"user_id": message.author.id})
+            await message.channel.send("❌ Application cancelled.")
+            return
+
+        # Fetch app config to get questions
+        app_config = self.bot.db["applications_config"].find_one({"guild_id": session["guild_id"], "app_id": session["app_id"]})
+        if not app_config:
+            self.bot.db["application_sessions"].delete_one({"user_id": message.author.id})
+            await message.channel.send("❌ Error: Application config missing. Session cleared.")
+            return
+
+        # Save answer
+        answers = session.get("answers", [])
+        answers.append(content)
+        current_q = session.get("current_q", 0)
+
+        questions = app_config.get("questions", [])
+        next_q_index = current_q + 1
+
+        if next_q_index < len(questions):
+            # Ask next question
+            self.bot.db["application_sessions"].update_one(
+                {"user_id": message.author.id},
+                {"$set": {"current_q": next_q_index, "answers": answers}}
+            )
+            await message.channel.send(f"**Question {next_q_index + 1}:** {questions[next_q_index]}")
+        else:
+            # Finished! Submit application
+            self.bot.db["application_sessions"].delete_one({"user_id": message.author.id})
+            
+            # Build Embed
+            embed = discord.Embed(title=f"📄 New {app_config['app_name']} Application", color=0x2b2d31, timestamp=datetime.now(timezone.utc))
+            embed.add_field(name="Applicant", value=f"{message.author.mention} (`{message.author.id}`)", inline=False)
+            embed.set_thumbnail(url=message.author.display_avatar.url)
+
+            for i, q in enumerate(questions):
+                if i < len(answers):
+                    val = answers[i]
+                    if len(val) > 1024: val = val[:1021] + "..."
+                    embed.add_field(name=q[:45], value=val, inline=False)
+
+            # Send to submitted channel
+            submitted_channel = self.bot.get_channel(app_config.get("submitted_channel_id"))
+            if submitted_channel:
+                trusted_role = discord.utils.get(submitted_channel.guild.roles, name=TRUSTED_STAFF_ROLE)
+                mention = trusted_role.mention if trusted_role else "@Trusted Staff"
+                
+                view = ApplicationActionView(session["app_id"], message.author.id, app_config)
+                # Send the ping FIRST, then the embed
+                await submitted_channel.send(content=mention, embed=embed, view=view)
+
+            await message.channel.send("✅ Application submitted successfully! You can close this DM.")
 
 async def setup(bot: commands.Bot):
     await bot.add_cog(Applications(bot))
