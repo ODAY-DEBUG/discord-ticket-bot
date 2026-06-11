@@ -4,24 +4,27 @@ from discord import app_commands
 from datetime import datetime, timezone
 from cogs.config import TRUSTED_STAFF_ROLE
 
+# ---------------------------------------------------------------------------
+# Application Views
+# ---------------------------------------------------------------------------
+
 class ApplyButton(discord.ui.Button):
     def __init__(self, app_id: str, app_name: str):
         super().__init__(
             label=f"Apply for {app_name}",
             style=discord.ButtonStyle.primary,
-            custom_id=f"apply_{app_id}"
+            custom_id=f"apply_{app_id}",
+            emoji="📝"
         )
         self.app_id = app_id
         self.app_name = app_name
 
     async def callback(self, interaction: discord.Interaction):
-        # Fetch app config from DB
         app_config = interaction.client.db["applications_config"].find_one({"guild_id": interaction.guild.id, "app_id": self.app_id})
         
         if not app_config or not app_config.get("is_open", False):
             return await interaction.response.send_message("❌ This application is closed right now.", ephemeral=True)
 
-        # Send DM to user
         try:
             dm_channel = await interaction.user.create_dm()
             start_view = StartAppView(self.app_id, self.app_name, app_config.get("questions", []))
@@ -30,6 +33,10 @@ class ApplyButton(discord.ui.Button):
         except discord.Forbidden:
             await interaction.response.send_message("❌ I couldn't DM you! Please enable DMs from server members.", ephemeral=True)
 
+class ApplyPanelView(discord.ui.View):
+    def __init__(self, app_id: str, app_name: str):
+        super().__init__(timeout=None)
+        self.add_item(ApplyButton(app_id, app_name))
 
 class StartAppView(discord.ui.View):
     def __init__(self, app_id: str, app_name: str, questions: list):
@@ -38,7 +45,7 @@ class StartAppView(discord.ui.View):
         self.app_name = app_name
         self.questions = questions
 
-        btn = discord.ui.Button(label="Start Application", style=discord.ButtonStyle.green, custom_id=f"start_{app_id}")
+        btn = discord.ui.Button(label="Start Application", style=discord.ButtonStyle.green, custom_id=f"start_{app_id}", emoji="✍️")
         btn.callback = self.start_callback
         self.add_item(btn)
 
@@ -46,14 +53,12 @@ class StartAppView(discord.ui.View):
         modal = ApplicationModal(self.app_id, self.app_name, self.questions)
         await interaction.response.send_modal(modal)
 
-
 class ApplicationModal(discord.ui.Modal):
     def __init__(self, app_id: str, app_name: str, questions: list):
         super().__init__(title=f"{app_name} Application")
         self.app_id = app_id
         self.app_name = app_name
         
-        # Dynamically add up to 5 questions
         for i, q in enumerate(questions[:5]):
             setattr(self, f"q{i+1}", discord.ui.TextInput(label=q[:45], style=discord.TextStyle.paragraph, required=True))
             self.add_item(getattr(self, f"q{i+1}"))
@@ -67,8 +72,8 @@ class ApplicationModal(discord.ui.Modal):
 
         embed = discord.Embed(title=f"📄 New {self.app_name} Application", color=0x2b2d31, timestamp=datetime.now(timezone.utc))
         embed.add_field(name="Applicant", value=f"{interaction.user.mention} (`{interaction.user.id}`)", inline=False)
+        embed.set_thumbnail(url=interaction.user.display_avatar.url)
 
-        # Add answers
         questions = app_config.get("questions", [])
         for i, q in enumerate(questions[:5]):
             answer = getattr(self, f"q{i+1}", None)
@@ -80,7 +85,6 @@ class ApplicationModal(discord.ui.Modal):
         view = ApplicationActionView(self.app_id, interaction.user.id, app_config)
         await submitted_channel.send(embed=embed, view=view)
         await interaction.response.send_message("✅ Application submitted successfully!", ephemeral=True)
-
 
 class ApplicationActionView(discord.ui.View):
     def __init__(self, app_id: str, applicant_id: int, app_config: dict):
@@ -94,7 +98,6 @@ class ApplicationActionView(discord.ui.View):
         if not interaction.user.guild_permissions.administrator:
             return await interaction.response.send_message("❌ Admins only.", ephemeral=True)
 
-        # Post to accepted channel
         accepted_ch = interaction.client.get_channel(self.app_config.get("accepted_channel_id"))
         if accepted_ch:
             new_embed = interaction.message.embeds[0]
@@ -103,7 +106,6 @@ class ApplicationActionView(discord.ui.View):
             new_embed.add_field(name="Accepted By", value=interaction.user.mention, inline=False)
             await accepted_ch.send(embed=new_embed)
 
-        # DM User
         try:
             user = await interaction.client.fetch_user(self.applicant_id)
             await user.send(f"🎉 Congratulations! Your **{self.app_config.get('app_name')}** application has been accepted!")
@@ -142,7 +144,6 @@ class ApplicationActionView(discord.ui.View):
         applicant = guild.get_member(self.applicant_id) or await guild.fetch_member(self.applicant_id)
         uname = applicant.name.lower()
 
-        # Create Application Ticket Category
         cat = discord.utils.get(guild.categories, name="Application Tickets")
         if not cat:
             cat = await guild.create_category("Application Tickets")
@@ -156,27 +157,16 @@ class ApplicationActionView(discord.ui.View):
         if trusted_role:
             overwrites[trusted_role] = discord.PermissionOverwrite(read_messages=True, send_messages=True, read_message_history=True, attach_files=True)
 
-        channel = await guild.create_text_channel(
-            name=f"app-{uname}",
-            category=cat,
-            overwrites=overwrites,
-            topic=f"Ticket by {applicant.name} | Application"
-        )
+        channel = await guild.create_text_channel(name=f"app-{uname}", category=cat, overwrites=overwrites, topic=f"Ticket by {applicant.name} | Application")
 
         from cogs.tickets_base import TicketView
-        embed = discord.Embed(
-            title=f"🎫 Application Ticket",
-            description=f"### Discussion with {applicant.mention}\n\n━━━━━━━━━━━━━━━━━━",
-            color=0x2b2d31,
-            timestamp=datetime.now(timezone.utc)
-        )
+        embed = discord.Embed(title="🎫 Application Ticket", description=f"### Discussion with {applicant.mention}\n\n━━━━━━━━━━━━━━━━━━", color=0x2b2d31, timestamp=datetime.now(timezone.utc))
         embed.add_field(name="Applicant", value=applicant.mention, inline=True)
         embed.add_field(name="Category", value="Application", inline=True)
         embed.set_footer(text=f"Channel ID: {channel.id}")
 
         view = TicketView()
         await channel.send(embed=embed, view=view)
-        # NO PING sent here as requested
 
         button.disabled = True
         button.label = "Ticket Opened"
@@ -184,9 +174,20 @@ class ApplicationActionView(discord.ui.View):
         await interaction.followup.send(f"✅ Ticket created: {channel.mention}", ephemeral=True)
 
 
+# ---------------------------------------------------------------------------
+# Cog
+# ---------------------------------------------------------------------------
+
 class Applications(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
+        # --- CRITICAL: Load buttons from DB so clicks don't fail ---
+        try:
+            for app in bot.db["applications_config"].find():
+                bot.add_view(ApplyPanelView(app["app_id"], app["app_name"]))
+            print("✅ Loaded Application Panel views.")
+        except Exception as e:
+            print(f"❌ Failed to load application views: {e}")
 
 async def setup(bot: commands.Bot):
     await bot.add_cog(Applications(bot))
