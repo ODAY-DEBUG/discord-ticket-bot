@@ -42,7 +42,9 @@ def save_user_warnings(db, guild_id: int, user_id: int, warnings_list: list):
 
 async def _log(interaction: discord.Interaction, embed: discord.Embed):
     """Send an embed to the mod-log channel if it exists."""
-    ch = discord.utils.get(interaction.guild.text_channels, name=LOG_CHANNEL)
+    cfg = get_guild_config(self.bot.db, interaction.guild.id)
+    if cfg["LOG_CHANNEL_ID"]:
+    	ch = interaction.guild.get_channel(cfg["LOG_CHANNEL_ID"])
     if ch:
         try:
             await ch.send(embed=embed)

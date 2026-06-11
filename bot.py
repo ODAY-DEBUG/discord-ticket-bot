@@ -90,7 +90,7 @@ async def sync_commands(ctx):
         # 3. Push the freshly rebuilt command list to Discord
         synced = await bot.tree.sync()
         names = ', '.join(f'/{c.name}' for c in synced)
-        await msg.edit(content=f'✅ Synced {len(synced)} global command(s):\n{names}\n\n*Note: Discord can take up to an hour to remove ghost commands from users' autocomplete, but they will work immediately for you.*')
+        await msg.edit(content=f"✅ Synced {len(synced)} global command(s):\n{names}\n\n*Note: Discord can take up to an hour to remove ghost commands from users' autocomplete, but they will work immediately for you.*")
     except Exception as e:
         await msg.edit(content=f'❌ Sync failed: {e}')
 
