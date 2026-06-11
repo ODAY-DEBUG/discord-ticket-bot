@@ -35,10 +35,24 @@ class ApplyButton(discord.ui.Button):
             if not questions:
                 return await interaction.response.send_message("❌ This application has no questions set up.", ephemeral=True)
 
-            # Start the DM conversation
-            await dm_channel.send(f"**Starting application for {app_config['app_name']}**\n\nYou can type `cancel` at any time to abort.\n\n**Question 1:** {questions[0]}")
+            # 1. Send the Green "Application Started" Embed
+            start_embed = discord.Embed(
+                title="✅ Application Started",
+                description=f"You are now applying for **{app_config['app_name']}**.\n\nType your answer in the chat, and I will ask the next question.\nYou can type `cancel` at any time to abort.",
+                color=discord.Color.green()
+            )
+            await dm_channel.send(embed=start_embed)
             
-            # Save session to MongoDB so we remember their progress
+            # 2. Send the Blue "Question 1" Embed
+            total_q = len(questions)
+            q_embed = discord.Embed(
+                title=f"{app_config['app_name']}",
+                description=f"**1/{total_q}. {questions[0]}**\n\nType your answer below.",
+                color=discord.Color.blue()
+            )
+            await dm_channel.send(embed=q_embed)
+            
+            # Save session to MongoDB
             interaction.client.db["application_sessions"].insert_one({
                 "user_id": interaction.user.id,
                 "guild_id": interaction.guild.id,
@@ -175,10 +189,17 @@ class Applications(commands.Cog):
         # Cancel command
         if content.lower() == "cancel":
             self.bot.db["application_sessions"].delete_one({"user_id": message.author.id})
-            await message.channel.send("❌ Application cancelled.")
+            
+            # Red Cancel Embed
+            cancel_embed = discord.Embed(
+                title="❌ Application Cancelled",
+                description="You have cancelled your application. You can close this DM.",
+                color=discord.Color.red()
+            )
+            await message.channel.send(embed=cancel_embed)
             return
 
-        # Fetch app config to get questions
+        # Fetch app config
         app_config = self.bot.db["applications_config"].find_one({"guild_id": session["guild_id"], "app_id": session["app_id"]})
         if not app_config:
             self.bot.db["application_sessions"].delete_one({"user_id": message.author.id})
@@ -191,20 +212,37 @@ class Applications(commands.Cog):
         current_q = session.get("current_q", 0)
 
         questions = app_config.get("questions", [])
+        total_q = len(questions)
         next_q_index = current_q + 1
 
-        if next_q_index < len(questions):
+        if next_q_index < total_q:
             # Ask next question
             self.bot.db["application_sessions"].update_one(
                 {"user_id": message.author.id},
                 {"$set": {"current_q": next_q_index, "answers": answers}}
             )
-            await message.channel.send(f"**Question {next_q_index + 1}:** {questions[next_q_index]}")
+            
+            # Blue Question Embed
+            q_embed = discord.Embed(
+                title=f"{app_config['app_name']}",
+                description=f"**{next_q_index + 1}/{total_q}. {questions[next_q_index]}**\n\nType your answer below.",
+                color=discord.Color.blue()
+            )
+            await message.channel.send(embed=q_embed)
+            
         else:
             # Finished! Submit application
             self.bot.db["application_sessions"].delete_one({"user_id": message.author.id})
             
-            # Build Embed
+            # Green Finish Embed
+            finish_embed = discord.Embed(
+                title="✅ Application Submitted",
+                description=f"Your application for **{app_config['app_name']}** has been successfully submitted!\nYou can close this DM.",
+                color=discord.Color.green()
+            )
+            await message.channel.send(embed=finish_embed)
+            
+            # Build Embed for Staff Channel
             embed = discord.Embed(title=f"📄 New {app_config['app_name']} Application", color=0x2b2d31, timestamp=datetime.now(timezone.utc))
             embed.add_field(name="Applicant", value=f"{message.author.mention} (`{message.author.id}`)", inline=False)
             embed.set_thumbnail(url=message.author.display_avatar.url)
@@ -213,7 +251,7 @@ class Applications(commands.Cog):
                 if i < len(answers):
                     val = answers[i]
                     if len(val) > 1024: val = val[:1021] + "..."
-                    embed.add_field(name=q[:45], value=val, inline=False)
+                    embed.add_field(name=f"{i+1}/{total_q}. {q[:45]}", value=val, inline=False)
 
             # Send to submitted channel
             submitted_channel = self.bot.get_channel(app_config.get("submitted_channel_id"))
@@ -222,10 +260,7 @@ class Applications(commands.Cog):
                 mention = trusted_role.mention if trusted_role else "@Trusted Staff"
                 
                 view = ApplicationActionView(session["app_id"], message.author.id, app_config)
-                # Send the ping FIRST, then the embed
                 await submitted_channel.send(content=mention, embed=embed, view=view)
-
-            await message.channel.send("✅ Application submitted successfully! You can close this DM.")
 
 async def setup(bot: commands.Bot):
     await bot.add_cog(Applications(bot))
