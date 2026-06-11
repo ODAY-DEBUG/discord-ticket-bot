@@ -73,36 +73,26 @@ async def on_ready():
 @bot.command(name='sync')
 @commands.has_permissions(administrator=True)
 async def sync_commands(ctx):
-    msg = await ctx.send('🔄 Reloading all cogs and syncing...')
+    msg = await ctx.send('🔄 Wiping old commands, reloading cogs, and syncing...')
     try:
+        # 1. Wipe the internal command tree clean
+        bot.tree.clear_commands(guild=None)
+        bot.tree.clear_commands(guild=ctx.guild)
+        
+        # 2. Reload all cogs so they re-register their commands into the empty tree
         for cog in COGS:
             try:
                 await bot.reload_extension(cog)
+                print(f'✅ Reloaded {cog}')
             except Exception as e:
                 print(f'❌ Reload failed for {cog}: {e}')
         
+        # 3. Push the freshly rebuilt command list to Discord
         synced = await bot.tree.sync()
         names = ', '.join(f'/{c.name}' for c in synced)
-        await msg.edit(content=f'✅ Synced {len(synced)} global command(s):\n{names}')
+        await msg.edit(content=f'✅ Synced {len(synced)} global command(s):\n{names}\n\n*Note: Discord can take up to an hour to remove ghost commands from users' autocomplete, but they will work immediately for you.*')
     except Exception as e:
         await msg.edit(content=f'❌ Sync failed: {e}')
-
-@bot.command(name='clearcommands')
-@commands.has_permissions(administrator=True)
-async def clear_commands(ctx):
-    msg = await ctx.send('🧹 Clearing all slash commands from Discord cache...')
-    try:
-        # Clear global commands
-        bot.tree.clear_commands(guild=None)
-        # Clear guild-specific commands
-        bot.tree.clear_commands(guild=ctx.guild)
-        
-        # Re-sync globally
-        synced = await bot.tree.sync()
-        names = ', '.join(f'/{c.name}' for c in synced)
-        await msg.edit(content=f'✅ Cleared cache and re-synced {len(synced)} global command(s):\n{names}\n\n*Note: It may take up to 1 hour for ghost commands to disappear from users clients, but they will be gone soon.*')
-    except Exception as e:
-        await msg.edit(content=f'❌ Clear failed: {e}')
 
 
 
