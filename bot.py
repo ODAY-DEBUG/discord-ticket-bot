@@ -29,6 +29,7 @@ COGS = [
     'cogs.automod',
     'cogs.logging',
     'cogs.autorole',      # <-- ADD THIS
+    'cogs.applications',  # ADD THIS
 ]
 
 class Bot(commands.Bot):
