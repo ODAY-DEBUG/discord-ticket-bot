@@ -3,8 +3,7 @@ from discord.ext import commands
 from discord import app_commands
 from datetime import datetime, timezone, timedelta
 from collections import defaultdict
-from cogs.config import STAFF_ROLE, LOG_CHANNEL, mod_only
-
+from cogs.config import STAFF_ROLE, LOG_CHANNEL, mod_only, get_guild_config
 # ---------------------------------------------------------------------------
 # Persistence for Warnings (MongoDB)
 # ---------------------------------------------------------------------------
@@ -42,14 +41,17 @@ def save_user_warnings(db, guild_id: int, user_id: int, warnings_list: list):
 
 async def _log(interaction: discord.Interaction, embed: discord.Embed):
     """Send an embed to the mod-log channel if it exists."""
-    cfg = get_guild_config(self.bot.db, interaction.guild.id)
-    if cfg["LOG_CHANNEL_ID"]:
-    	ch = interaction.guild.get_channel(cfg["LOG_CHANNEL_ID"])
-    if ch:
-        try:
-            await ch.send(embed=embed)
-        except discord.Forbidden:
-            pass
+    # Fetch the dynamic config from the website dashboard
+    cfg = get_guild_config(interaction.client.db, interaction.guild.id)
+    log_channel_id = cfg.get("LOG_CHANNEL_ID")
+    
+    if log_channel_id:
+        ch = interaction.guild.get_channel(log_channel_id)
+        if ch:
+            try:
+                await ch.send(embed=embed)
+            except discord.Forbidden:
+                pass
 
 
 def _mod_embed(
