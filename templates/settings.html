@@ -125,6 +125,16 @@
                         {% endfor %}
                     </select>
                 </div>
+	        <!-- ADD THIS NEW DROPDOWN -->
+            	<div class="form-group">
+               	    <label>Ticket Transcripts Channel</label>
+                    <select name="TRANSCRIPT_CHANNEL_ID">
+                    	<option value="none" {% if not settings.config or not settings.config.TRANSCRIPT_CHANNEL_ID %}selected{% endif %}>Disabled</option>
+                    	{% for channel in channels|sort(attribute='position') %}
+                    	<option value="{{ channel.id }}" {% if settings.config and settings.config.TRANSCRIPT_CHANNEL_ID and settings.config.TRANSCRIPT_CHANNEL_ID|string == channel.id|string %}selected{% endif %}># {{ channel.name }}</option>
+                    	{% endfor %}
+                    </select>
+            	</div>
                 <button type="submit">Save Logging</button>
             </form>
         </div>

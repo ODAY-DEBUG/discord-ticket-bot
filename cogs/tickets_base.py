@@ -2,10 +2,11 @@ import discord
 from discord.ext import commands
 from discord import app_commands
 import asyncio
+import io
 from datetime import datetime, timezone
 from cogs.config import (
     STAFF_ROLE, SELLER_ROLES, TICKET_PREFIXES,
-    staff_only, admin_only,
+    staff_only, admin_only, get_guild_config,
 )
 
 # ---------------------------------------------------------------------------
@@ -31,7 +32,7 @@ def is_ticket_channel(channel: discord.TextChannel) -> bool:
 
 
 async def create_ticket_channel(interaction: discord.Interaction, cfg: dict, category: str, answers: dict):
-    """Creates the ticket channel and posts the answers embed. Called after modal submit."""
+    """Creates the ticket channel and posts the answers embed."""
     uname = interaction.user.name.lower()
 
     dc_cat = discord.utils.get(interaction.guild.categories, name=cfg["cat"])
@@ -100,9 +101,75 @@ async def check_existing_ticket(interaction: discord.Interaction) -> bool:
             return True
     return False
 
+# ---------------------------------------------------------------------------
+# Transcript & Close Helper
+# ---------------------------------------------------------------------------
+
+async def _close_ticket(channel: discord.TextChannel, closed_by: discord.Member):
+    """Generates transcript, sends it, and deletes the channel."""
+    guild = channel.guild
+    creator_name = get_creator_name(channel)
+    
+    # 1. Generate Transcript
+    messages = []
+    try:
+        async for msg in channel.history(limit=None, oldest_first=True):
+            timestamp = msg.created_at.strftime("%Y-%m-%d %H:%M UTC")
+            content = msg.content
+            if msg.attachments:
+                attachment_urls = ", ".join(a.url for a in msg.attachments)
+                content += f" [Attachments: {attachment_urls}]"
+            messages.append(f"[{timestamp}] {msg.author}: {content}")
+    except Exception as e:
+        print(f"Error fetching messages for transcript: {e}")
+
+    transcript_text = "\n".join(messages) if messages else "No messages were sent."
+    transcript_bytes = transcript_text.encode('utf-8')
+    
+    file = discord.File(fp=io.BytesIO(transcript_bytes), filename=f"transcript-{channel.name}.txt")
+
+    # 2. Send to Transcript Channel (from website config)
+    cfg = get_guild_config(channel.client.db, guild.id)
+    transcript_channel_id = cfg.get("TRANSCRIPT_CHANNEL_ID")
+    
+    if transcript_channel_id:
+        t_channel = guild.get_channel(transcript_channel_id)
+        if t_channel:
+            try:
+                t_embed = discord.Embed(
+                    title=f"📑 Ticket Closed: {channel.name}",
+                    description=f"**Category:** {channel.topic.split('|')[1].strip() if '|' in channel.topic else 'Unknown'}\n**Closed By:** {closed_by.mention}",
+                    color=0x2b2d31,
+                    timestamp=datetime.now(timezone.utc)
+                )
+                await t_channel.send(embed=t_embed, file=file)
+            except discord.Forbidden:
+                print(f"Missing permissions to send transcript to {t_channel.name}")
+
+    # 3. Send to Ticket Creator DM
+    creator_member = guild.get_member_named(creator_name) or discord.utils.get(guild.members, name=creator_name)
+    if creator_member:
+        try:
+            dm_embed = discord.Embed(
+                title=f"📑 Ticket Closed: {channel.name}",
+                description=f"Your ticket in **{guild.name}** was closed by {closed_by.mention}. Here is your transcript:",
+                color=0x2b2d31
+            )
+            # We need to create a new file object because discord.py consumes the old one
+            dm_file = discord.File(fp=io.BytesIO(transcript_bytes), filename=f"transcript-{channel.name}.txt")
+            await creator_member.send(embed=dm_embed, file=dm_file)
+        except discord.HTTPException:
+            pass # DMs closed
+
+    # 4. Delete Channel
+    try:
+        await channel.delete()
+    except discord.NotFound:
+        pass
+
 
 # ---------------------------------------------------------------------------
-# Modals — one per category
+# Modals — one per category (Keep exactly as you have them)
 # ---------------------------------------------------------------------------
 
 class BaseBuyingModal(discord.ui.Modal, title="🏠 Base Buying Ticket"):
@@ -153,24 +220,21 @@ class SpawnerModal(discord.ui.Modal, title="🔄 Spawner Trading Ticket"):
 class BuildingModal(discord.ui.Modal, title="🏗️ Building Ticket"):
     q1 = discord.ui.TextInput(label="What is your IGN?", style=discord.TextStyle.short, required=True)
     q2 = discord.ui.TextInput(label="What is your budget?", style=discord.TextStyle.short, required=True)
-    q3 = discord.ui.TextInput(label="What type of base do you need?", style=discord.TextStyle.short, required=True)
-    q4 = discord.ui.TextInput(label="Do you have any specific requirements?", style=discord.TextStyle.paragraph, required=False)
+    q3 = discord.ui.TextInput(label="What base do you need?", style=discord.TextStyle.short, required=True)
+    q4 = discord.ui.TextInput(label="Specific requirements?", style=discord.TextStyle.paragraph, required=False)
     q5 = discord.ui.TextInput(label="How soon do you need the base?", style=discord.TextStyle.short, required=True, placeholder="ASAP / Within a week / No rush")
 
     async def on_submit(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
-        try:
-            from cogs.tickets_building import create_builder_ticket
-            await create_builder_ticket(interaction, {
-                self.q1.label: self.q1.value,
-                self.q2.label: self.q2.value,
-                self.q3.label: self.q3.value,
-                self.q4.label: self.q4.value,
-                self.q5.label: self.q5.value,
-            })
-        except Exception as e:
-            print(f"❌ BUILDING MODAL CRASHED: {e}")
-            await interaction.followup.send(f"❌ An error occurred creating your ticket: `{e}`", ephemeral=True)
+        from cogs.tickets_building import BUILDING_CFG
+        await create_ticket_channel(interaction, BUILDING_CFG, "Building", {
+            self.q1.label: self.q1.value,
+            self.q2.label: self.q2.value,
+            self.q3.label: self.q3.value,
+            self.q4.label: self.q4.value,
+            self.q5.label: self.q5.value,
+        })
+
 
 class SupportModal(discord.ui.Modal, title="❓ Support Ticket"):
     q1 = discord.ui.TextInput(label="What do you need help with?",              style=discord.TextStyle.short,     required=True)
@@ -228,16 +292,13 @@ class TicketView(discord.ui.View):
         if not staff_role or staff_role not in interaction.user.roles:
             await interaction.response.send_message("❌ Staff only!", ephemeral=True)
             return
-        await interaction.response.send_message("🔒 Closing ticket in 5 seconds…")
-        await asyncio.sleep(5)
-        try:
-            await interaction.channel.delete()
-        except discord.NotFound:
-            pass
+        
+        await interaction.response.send_message("🔒 Closing ticket and generating transcript...", ephemeral=True)
+        await _close_ticket(interaction.channel, interaction.user)
 
 
 # ---------------------------------------------------------------------------
-# Panel views — buttons open modals (after duplicate check)
+# Panel views — buttons open modals (Keep exactly as you have them)
 # ---------------------------------------------------------------------------
 
 class TicketPanelView(discord.ui.View):
@@ -365,18 +426,13 @@ class TicketsBase(commands.Cog):
         else:
             await interaction.response.send_message(msg, ephemeral=True)
 
-    @app_commands.command(name="ticketpanel", description="Post a ticket panel")
-    @app_commands.describe(panel="Which ticket panel to post?")
+    @app_commands.command(name="ticketpanel", description="Post the full ticket panel (all categories)")
     @admin_only()
-    async def ticketpanel(self, interaction: discord.Interaction, panel: str):
+    async def ticketpanel(self, interaction: discord.Interaction):
         await _clear_bot_messages(interaction.channel, self.bot.user)
-        embed = discord.Embed(color=0x2b2d31)
-        if interaction.guild.icon:
-            embed.set_thumbnail(url=interaction.guild.icon.url)
-
-        if panel == "all":
-            embed.title = "🎫 Support Tickets"
-            embed.description = (
+        embed = discord.Embed(
+            title="🎫 Support Tickets",
+            description=(
                 "### Click a button below to open a ticket!\n\n"
                 "🏠 **Base Buying** — Purchase a base\n"
                 "🕳️ **Bedrock Hole** — Buy a bedrock hole\n"
@@ -384,41 +440,12 @@ class TicketsBase(commands.Cog):
                 "🏗️ **Building** — Building services\n"
                 "❓ **Support** — General help\n"
                 "⚠️ **Scam Report** — Report a scam"
-            )
-            await interaction.response.send_message(embed=embed, view=TicketPanelView())
-        elif panel == "base":
-            embed.title = "🏠 Base Buying"
-            embed.description = "Click the button below to open a **Base Buying** ticket."
-            embed.color = 0x2ecc71
-            await interaction.response.send_message(embed=embed, view=BaseBuyingPanelView())
-        elif panel == "bedrock":
-            embed.title = "🕳️ Bedrock Hole Buying"
-            embed.description = "Click the button below to open a **Bedrock Hole** ticket."
-            embed.color = 0x95a5a6
-            await interaction.response.send_message(embed=embed, view=BedrockPanelView())
-        elif panel == "spawner":
-            embed.title = "🔄 Spawner Trading"
-            embed.description = "Click the button below to open a **Spawner Trade** ticket."
-            embed.color = 0xf1c40f
-            await interaction.response.send_message(embed=embed, view=SpawnerPanelView())
-        elif panel == "building":
-            embed.title = "🏗️ Building"
-            embed.description = "Click the button below to open a **Building** ticket."
-            embed.color = 0x9b59b6
-            await interaction.response.send_message(embed=embed, view=BuildingPanelView())
-        elif panel == "support":
-            embed.title = "❓ Support & Reports"
-            embed.description = "Click a button below to open a ticket.\n\n❓ **Support** — General help\n⚠️ **Scam Report** — Report a scam"
-            embed.color = 0x3498db
-            await interaction.response.send_message(embed=embed, view=SupportPanelView())
-        else:
-            await interaction.response.send_message("❌ Invalid panel type.", ephemeral=True)
-
-    # This tells Discord to show a dropdown menu for the "panel" parameter
-    @ticketpanel.autocomplete('panel')
-    async def panel_autocomplete(self, interaction: discord.Interaction, current: str):
-        options = ["all", "base", "bedrock", "spawner", "building", "support"]
-        return [app_commands.Choice(name=opt, value=opt) for opt in options if current.lower() in opt]
+            ),
+            color=0x2b2d31,
+        )
+        if interaction.guild.icon:
+            embed.set_thumbnail(url=interaction.guild.icon.url)
+        await interaction.response.send_message(embed=embed, view=TicketPanelView())
 
     @app_commands.command(name="close", description="Close the current ticket")
     async def close(self, interaction: discord.Interaction):
@@ -437,12 +464,8 @@ class TicketsBase(commands.Cog):
             await interaction.response.send_message("❌ You don't have permission to close this ticket.", ephemeral=True)
             return
 
-        await interaction.response.send_message("🔒 Closing ticket in 5 seconds…")
-        await asyncio.sleep(5)
-        try:
-            await ch.delete()
-        except discord.NotFound:
-            pass
+        await interaction.response.send_message("🔒 Closing ticket and generating transcript...", ephemeral=True)
+        await _close_ticket(ch, interaction.user)
 
 
 async def setup(bot: commands.Bot):

@@ -143,6 +143,7 @@ def guild_dashboard(guild_id):
             admin_role = request.form.get("ADMIN_ROLE")
             trusted_staff_role = request.form.get("TRUSTED_STAFF_ROLE")
             log_channel_id = request.form.get("LOG_CHANNEL_ID")
+            transcript_channel_id = request.form.get("TRANSCRIPT_CHANNEL_ID") # <-- ADD THIS
             
             db["bot_config"].update_one(
                 {"guild_id": guild_id},
@@ -151,11 +152,11 @@ def guild_dashboard(guild_id):
                     "MOD_ROLE": mod_role,
                     "ADMIN_ROLE": admin_role,
                     "TRUSTED_STAFF_ROLE": trusted_staff_role,
-                    "LOG_CHANNEL_ID": int(log_channel_id) if log_channel_id and log_channel_id != "none" else None
+                    "LOG_CHANNEL_ID": int(log_channel_id) if log_channel_id and log_channel_id != "none" else None,
+                    "TRANSCRIPT_CHANNEL_ID": int(transcript_channel_id) if transcript_channel_id and transcript_channel_id != "none" else None # <-- ADD THIS
                 }},
                 upsert=True
             )
-
         elif form_type == "create_app":
             app_id = request.form.get("app_id").lower().replace(" ", "-")
             app_name = request.form.get("app_name")
