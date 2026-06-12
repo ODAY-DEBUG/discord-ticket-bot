@@ -105,7 +105,7 @@ async def check_existing_ticket(interaction: discord.Interaction) -> bool:
 # Transcript & Close Helper
 # ---------------------------------------------------------------------------
 
-async def _close_ticket(channel: discord.TextChannel, closed_by: discord.Member):
+async def _close_ticket(channel: discord.TextChannel, closed_by: discord.Member, db):
     """Generates transcript, sends it, and deletes the channel."""
     guild = channel.guild
     creator_name = get_creator_name(channel)
@@ -129,44 +129,51 @@ async def _close_ticket(channel: discord.TextChannel, closed_by: discord.Member)
     file = discord.File(fp=io.BytesIO(transcript_bytes), filename=f"transcript-{channel.name}.txt")
 
     # 2. Send to Transcript Channel (from website config)
-    cfg = get_guild_config(channel.client.db, guild.id)
-    transcript_channel_id = cfg.get("TRANSCRIPT_CHANNEL_ID")
-    
-    if transcript_channel_id:
-        t_channel = guild.get_channel(transcript_channel_id)
-        if t_channel:
-            try:
-                t_embed = discord.Embed(
-                    title=f"📑 Ticket Closed: {channel.name}",
-                    description=f"**Category:** {channel.topic.split('|')[1].strip() if '|' in channel.topic else 'Unknown'}\n**Closed By:** {closed_by.mention}",
-                    color=0x2b2d31,
-                    timestamp=datetime.now(timezone.utc)
-                )
-                await t_channel.send(embed=t_embed, file=file)
-            except discord.Forbidden:
-                print(f"Missing permissions to send transcript to {t_channel.name}")
+    try:
+        cfg = get_guild_config(db, guild.id)
+        transcript_channel_id = cfg.get("TRANSCRIPT_CHANNEL_ID")
+        
+        if transcript_channel_id:
+            t_channel = guild.get_channel(transcript_channel_id)
+            if t_channel:
+                try:
+                    t_embed = discord.Embed(
+                        title=f"📑 Ticket Closed: {channel.name}",
+                        description=f"**Category:** {channel.topic.split('|')[1].strip() if '|' in channel.topic else 'Unknown'}\n**Closed By:** {closed_by.mention}",
+                        color=0x2b2d31,
+                        timestamp=datetime.now(timezone.utc)
+                    )
+                    await t_channel.send(embed=t_embed, file=file)
+                except discord.Forbidden:
+                    print(f"Missing permissions to send transcript to {t_channel.name}")
+    except Exception as e:
+        print(f"Error sending transcript to channel: {e}")
 
     # 3. Send to Ticket Creator DM
-    creator_member = guild.get_member_named(creator_name) or discord.utils.get(guild.members, name=creator_name)
-    if creator_member:
-        try:
-            dm_embed = discord.Embed(
-                title=f"📑 Ticket Closed: {channel.name}",
-                description=f"Your ticket in **{guild.name}** was closed by {closed_by.mention}. Here is your transcript:",
-                color=0x2b2d31
-            )
-            # We need to create a new file object because discord.py consumes the old one
-            dm_file = discord.File(fp=io.BytesIO(transcript_bytes), filename=f"transcript-{channel.name}.txt")
-            await creator_member.send(embed=dm_embed, file=dm_file)
-        except discord.HTTPException:
-            pass # DMs closed
+    try:
+        creator_member = guild.get_member_named(creator_name) or discord.utils.get(guild.members, name=creator_name)
+        if creator_member:
+            try:
+                dm_embed = discord.Embed(
+                    title=f"📑 Ticket Closed: {channel.name}",
+                    description=f"Your ticket in **{guild.name}** was closed by {closed_by.mention}. Here is your transcript:",
+                    color=0x2b2d31
+                )
+                # We need to create a new file object because discord.py consumes the old one
+                dm_file = discord.File(fp=io.BytesIO(transcript_bytes), filename=f"transcript-{channel.name}.txt")
+                await creator_member.send(embed=dm_embed, file=dm_file)
+            except discord.HTTPException:
+                pass # DMs closed
+    except Exception as e:
+        print(f"Error sending transcript to DM: {e}")
 
-    # 4. Delete Channel
+    # 4. Delete Channel (Always run this, even if transcript fails)
     try:
         await channel.delete()
     except discord.NotFound:
         pass
-
+    except Exception as e:
+        print(f"Error deleting channel: {e}")
 
 # ---------------------------------------------------------------------------
 # Modals — one per category (Keep exactly as you have them)
@@ -294,7 +301,7 @@ class TicketView(discord.ui.View):
             return
         
         await interaction.response.send_message("🔒 Closing ticket and generating transcript...", ephemeral=True)
-        await _close_ticket(interaction.channel, interaction.user)
+        await _close_ticket(interaction.channel, interaction.user, interaction.client.db) # <-- ADDED DB
 
 
 # ---------------------------------------------------------------------------
@@ -465,7 +472,7 @@ class TicketsBase(commands.Cog):
             return
 
         await interaction.response.send_message("🔒 Closing ticket and generating transcript...", ephemeral=True)
-        await _close_ticket(ch, interaction.user)
+        await _close_ticket(ch, interaction.user, self.bot.db) # <-- ADDED DB
 
 
 async def setup(bot: commands.Bot):
