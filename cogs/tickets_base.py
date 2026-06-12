@@ -10,7 +10,7 @@ from cogs.config import (
 )
 
 # ✅ DEFAULT FALLBACK TRANSCRIPT CHANNEL ID
-DEFAULT_TRANSCRIPT_CHANNEL_ID = 123456789012345678  # <-- CHANGE THIS
+DEFAULT_TRANSCRIPT_CHANNEL_ID = 1515122425556111511 # <-- CHANGE THIS
 
 # ---------------------------------------------------------------------------
 # Shared helpers
