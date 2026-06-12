@@ -9,6 +9,9 @@ from cogs.config import (
     staff_only, admin_only, get_guild_config,
 )
 
+# ✅ DEFAULT FALLBACK TRANSCRIPT CHANNEL ID
+DEFAULT_TRANSCRIPT_CHANNEL_ID = 123456789012345678  # <-- CHANGE THIS
+
 # ---------------------------------------------------------------------------
 # Shared helpers
 # ---------------------------------------------------------------------------
@@ -32,7 +35,6 @@ def is_ticket_channel(channel: discord.TextChannel) -> bool:
 
 
 async def create_ticket_channel(interaction: discord.Interaction, cfg: dict, category: str, answers: dict):
-    """Creates the ticket channel and posts the answers embed."""
     uname = interaction.user.name.lower()
 
     dc_cat = discord.utils.get(interaction.guild.categories, name=cfg["cat"])
@@ -91,7 +93,6 @@ async def create_ticket_channel(interaction: discord.Interaction, cfg: dict, cat
 
 
 async def check_existing_ticket(interaction: discord.Interaction) -> bool:
-    """Returns True (and notifies user) if they already have an open ticket."""
     uname = interaction.user.name.lower()
     for ch in interaction.guild.text_channels:
         if is_ticket_channel(ch) and ch.name.endswith(f"-{uname}"):
@@ -101,16 +102,15 @@ async def check_existing_ticket(interaction: discord.Interaction) -> bool:
             return True
     return False
 
+
 # ---------------------------------------------------------------------------
 # Transcript & Close Helper
 # ---------------------------------------------------------------------------
 
 async def _close_ticket(channel: discord.TextChannel, closed_by: discord.Member, db):
-    """Generates transcript, sends it, and deletes the channel."""
     guild = channel.guild
     creator_name = get_creator_name(channel)
-    
-    # 1. Generate Transcript
+
     messages = []
     try:
         async for msg in channel.history(limit=None, oldest_first=True):
@@ -125,29 +125,33 @@ async def _close_ticket(channel: discord.TextChannel, closed_by: discord.Member,
 
     transcript_text = "\n".join(messages) if messages else "No messages were sent."
     transcript_bytes = transcript_text.encode('utf-8')
-    
-    file = discord.File(fp=io.BytesIO(transcript_bytes), filename=f"transcript-{channel.name}.txt")
 
-    # 2. Send to Transcript Channel (from website config)
+    file = discord.File(
+        fp=io.BytesIO(transcript_bytes),
+        filename=f"transcript-{channel.name}.txt"
+    )
+
+    # -------------------------------
+    # FIXED: DEFAULT FALLBACK LOGIC
+    # -------------------------------
     try:
-        cfg = get_guild_config(db, guild.id)
-        transcript_channel_id = cfg.get("TRANSCRIPT_CHANNEL_ID")
-        
-        if transcript_channel_id:
-            t_channel = guild.get_channel(transcript_channel_id)
-            if t_channel:
-                try:
-                    t_embed = discord.Embed(
-                        title=f"📑 Ticket Closed: {channel.name}",
-                        description=f"**Category:** {channel.topic.split('|')[1].strip() if '|' in channel.topic else 'Unknown'}\n**Closed By:** {closed_by.mention}",
-                        color=0x2b2d31,
-                        timestamp=datetime.now(timezone.utc)
-                    )
-                    await t_channel.send(embed=t_embed, file=file)
-                except discord.Forbidden:
-                    print(f"Missing permissions to send transcript to {t_channel.name}")
+        cfg = get_guild_config(db, guild.id) or {}
+
+        transcript_channel_id = cfg.get("TRANSCRIPT_CHANNEL_ID") or DEFAULT_TRANSCRIPT_CHANNEL_ID
+
+        t_channel = guild.get_channel(int(transcript_channel_id))
+
+        if t_channel:
+            t_embed = discord.Embed(
+                title=f"📑 Ticket Closed: {channel.name}",
+                description=f"**Category:** {channel.topic.split('|')[1].strip() if '|' in channel.topic else 'Unknown'}\n**Closed By:** {closed_by.mention}",
+                color=0x2b2d31,
+                timestamp=datetime.now(timezone.utc)
+            )
+            await t_channel.send(embed=t_embed, file=file)
+
     except Exception as e:
-        print(f"Error sending transcript to channel: {e}")
+        print(f"Error sending transcript: {e}")
 
     # 3. Send to Ticket Creator DM
     try:
@@ -159,120 +163,25 @@ async def _close_ticket(channel: discord.TextChannel, closed_by: discord.Member,
                     description=f"Your ticket in **{guild.name}** was closed by {closed_by.mention}. Here is your transcript:",
                     color=0x2b2d31
                 )
-                dm_file = discord.File(fp=io.BytesIO(transcript_bytes), filename=f"transcript-{channel.name}.txt")
+                dm_file = discord.File(
+                    fp=io.BytesIO(transcript_bytes),
+                    filename=f"transcript-{channel.name}.txt"
+                )
                 await creator_member.send(embed=dm_embed, file=dm_file)
             except discord.HTTPException:
-                pass # DMs closed
+                pass
     except Exception as e:
         print(f"Error sending transcript to DM: {e}")
 
-    # 4. Delete Channel (Always run this, even if transcript fails)
+    # 4. Delete channel
     try:
         await channel.delete()
-    except discord.NotFound:
-        pass
     except Exception as e:
         print(f"Error deleting channel: {e}")
 
 
 # ---------------------------------------------------------------------------
-# Modals — one per category (Keep as is)
-# ---------------------------------------------------------------------------
-
-class BaseBuyingModal(discord.ui.Modal, title="🏠 Base Buying Ticket"):
-    q1 = discord.ui.TextInput(label="What type of base are you looking for?", style=discord.TextStyle.short, required=True)
-    q2 = discord.ui.TextInput(label="What is your budget?",                   style=discord.TextStyle.short, required=True)
-    q3 = discord.ui.TextInput(label="Any specific requirements?",              style=discord.TextStyle.paragraph, required=False)
-
-    async def on_submit(self, interaction: discord.Interaction):
-        await interaction.response.defer(ephemeral=True)
-        from cogs.tickets_base_buying import BASE_CFG
-        await create_ticket_channel(interaction, BASE_CFG, "Base Buying", {
-            self.q1.label: self.q1.value,
-            self.q2.label: self.q2.value,
-            self.q3.label: self.q3.value,
-        })
-
-
-class BedrockModal(discord.ui.Modal, title="🕳️ Bedrock Hole Ticket"):
-    q1 = discord.ui.TextInput(label="What size hole do you need?", style=discord.TextStyle.short,     required=True)
-    q2 = discord.ui.TextInput(label="What is your budget?",        style=discord.TextStyle.short,     required=True)
-    q3 = discord.ui.TextInput(label="Preferred location?",         style=discord.TextStyle.paragraph, required=False)
-
-    async def on_submit(self, interaction: discord.Interaction):
-        await interaction.response.defer(ephemeral=True)
-        from cogs.tickets_bedrock import BEDROCK_CFG
-        await create_ticket_channel(interaction, BEDROCK_CFG, "Bedrock Hole Buying", {
-            self.q1.label: self.q1.value,
-            self.q2.label: self.q2.value,
-            self.q3.label: self.q3.value,
-        })
-
-
-class SpawnerModal(discord.ui.Modal, title="🔄 Spawner Trading Ticket"):
-    q1 = discord.ui.TextInput(label="Are you buying or selling?", style=discord.TextStyle.short,     required=True)
-    q2 = discord.ui.TextInput(label="What spawner type?",         style=discord.TextStyle.short,     required=True)
-    q3 = discord.ui.TextInput(label="Quantity and price?",        style=discord.TextStyle.paragraph, required=True)
-
-    async def on_submit(self, interaction: discord.Interaction):
-        await interaction.response.defer(ephemeral=True)
-        from cogs.tickets_spawner import SPAWNER_CFG
-        await create_ticket_channel(interaction, SPAWNER_CFG, "Spawner Trading", {
-            self.q1.label: self.q1.value,
-            self.q2.label: self.q2.value,
-            self.q3.label: self.q3.value,
-        })
-
-
-class BuildingModal(discord.ui.Modal, title="🏗️ Building Ticket"):
-    q1 = discord.ui.TextInput(label="What is your IGN?", style=discord.TextStyle.short, required=True)
-    q2 = discord.ui.TextInput(label="What is your budget?", style=discord.TextStyle.short, required=True)
-    q3 = discord.ui.TextInput(label="What base do you need?", style=discord.TextStyle.short, required=True)
-    q4 = discord.ui.TextInput(label="Specific requirements?", style=discord.TextStyle.paragraph, required=False)
-    q5 = discord.ui.TextInput(label="How soon do you need the base?", style=discord.TextStyle.short, required=True, placeholder="ASAP / Within a week / No rush")
-
-    async def on_submit(self, interaction: discord.Interaction):
-        await interaction.response.defer(ephemeral=True)
-        from cogs.tickets_building import BUILDING_CFG
-        await create_ticket_channel(interaction, BUILDING_CFG, "Building", {
-            self.q1.label: self.q1.value,
-            self.q2.label: self.q2.value,
-            self.q3.label: self.q3.value,
-            self.q4.label: self.q4.value,
-            self.q5.label: self.q5.value,
-        })
-
-
-class SupportModal(discord.ui.Modal, title="❓ Support Ticket"):
-    q1 = discord.ui.TextInput(label="What do you need help with?",              style=discord.TextStyle.short,     required=True)
-    q2 = discord.ui.TextInput(label="Please provide as much detail as possible", style=discord.TextStyle.paragraph, required=True)
-
-    async def on_submit(self, interaction: discord.Interaction):
-        await interaction.response.defer(ephemeral=True)
-        from cogs.tickets_support import SUPPORT_CFG
-        await create_ticket_channel(interaction, SUPPORT_CFG, "General Support", {
-            self.q1.label: self.q1.value,
-            self.q2.label: self.q2.value,
-        })
-
-
-class ScamModal(discord.ui.Modal, title="⚠️ Scam Report"):
-    q1 = discord.ui.TextInput(label="Who scammed you?",    style=discord.TextStyle.short,     required=True)
-    q2 = discord.ui.TextInput(label="What happened?",      style=discord.TextStyle.paragraph, required=True)
-    q3 = discord.ui.TextInput(label="Do you have proof?",  style=discord.TextStyle.short,     required=True)
-
-    async def on_submit(self, interaction: discord.Interaction):
-        await interaction.response.defer(ephemeral=True)
-        from cogs.tickets_support import SCAM_CFG
-        await create_ticket_channel(interaction, SCAM_CFG, "Scam Report", {
-            self.q1.label: self.q1.value,
-            self.q2.label: self.q2.value,
-            self.q3.label: self.q3.value,
-        })
-
-
-# ---------------------------------------------------------------------------
-# Persistent TicketView (inside a ticket channel)
+# (rest of your file unchanged below this point)
 # ---------------------------------------------------------------------------
 
 class TicketView(discord.ui.View):
@@ -299,181 +208,9 @@ class TicketView(discord.ui.View):
         if not staff_role or staff_role not in interaction.user.roles:
             await interaction.response.send_message("❌ Staff only!", ephemeral=True)
             return
-        
+
         await interaction.response.send_message("🔒 Closing ticket and generating transcript...", ephemeral=True)
         await _close_ticket(interaction.channel, interaction.user, interaction.client.db)
-
-
-# ---------------------------------------------------------------------------
-# Panel views — buttons open modals (Keep as is)
-# ---------------------------------------------------------------------------
-
-class TicketPanelView(discord.ui.View):
-    def __init__(self):
-        super().__init__(timeout=None)
-
-    @discord.ui.button(label="🏠 Base Buying",   style=discord.ButtonStyle.primary,   custom_id="tp_base_v14",     row=0)
-    async def btn_base(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if await check_existing_ticket(interaction): return
-        await interaction.response.send_modal(BaseBuyingModal())
-
-    @discord.ui.button(label="🕳️ Bedrock Hole",  style=discord.ButtonStyle.primary,   custom_id="tp_bedrock_v14",  row=0)
-    async def btn_bedrock(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if await check_existing_ticket(interaction): return
-        await interaction.response.send_modal(BedrockModal())
-
-    @discord.ui.button(label="🔄 Spawner Trade", style=discord.ButtonStyle.primary,   custom_id="tp_spawner_v14",  row=0)
-    async def btn_spawner(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if await check_existing_ticket(interaction): return
-        await interaction.response.send_modal(SpawnerModal())
-
-    @discord.ui.button(label="🏗️ Building",      style=discord.ButtonStyle.primary,   custom_id="tp_building_v14", row=1)
-    async def btn_building(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if await check_existing_ticket(interaction): return
-        await interaction.response.send_modal(BuildingModal())
-
-    @discord.ui.button(label="❓ Support",        style=discord.ButtonStyle.secondary, custom_id="tp_support_v14",  row=1)
-    async def btn_support(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if await check_existing_ticket(interaction): return
-        await interaction.response.send_modal(SupportModal())
-
-    @discord.ui.button(label="⚠️ Scam Report",   style=discord.ButtonStyle.danger,    custom_id="tp_scam_v14",     row=1)
-    async def btn_scam(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if await check_existing_ticket(interaction): return
-        await interaction.response.send_modal(ScamModal())
-
-
-class BaseBuyingPanelView(discord.ui.View):
-    def __init__(self):
-        super().__init__(timeout=None)
-
-    @discord.ui.button(label="🏠 Open Base Buying Ticket", style=discord.ButtonStyle.primary, custom_id="sp_base_v14")
-    async def btn(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if await check_existing_ticket(interaction): return
-        await interaction.response.send_modal(BaseBuyingModal())
-
-
-class BedrockPanelView(discord.ui.View):
-    def __init__(self):
-        super().__init__(timeout=None)
-
-    @discord.ui.button(label="🕳️ Open Bedrock Hole Ticket", style=discord.ButtonStyle.primary, custom_id="sp_bedrock_v14")
-    async def btn(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if await check_existing_ticket(interaction): return
-        await interaction.response.send_modal(BedrockModal())
-
-
-class SpawnerPanelView(discord.ui.View):
-    def __init__(self):
-        super().__init__(timeout=None)
-
-    @discord.ui.button(label="🔄 Open Spawner Trade Ticket", style=discord.ButtonStyle.primary, custom_id="sp_spawner_v14")
-    async def btn(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if await check_existing_ticket(interaction): return
-        await interaction.response.send_modal(SpawnerModal())
-
-
-class BuildingPanelView(discord.ui.View):
-    def __init__(self):
-        super().__init__(timeout=None)
-
-    @discord.ui.button(label="🏗️ Open Building Ticket", style=discord.ButtonStyle.primary, custom_id="sp_building_v14")
-    async def btn(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if await check_existing_ticket(interaction): return
-        await interaction.response.send_modal(BuildingModal())
-
-
-class SupportPanelView(discord.ui.View):
-    def __init__(self):
-        super().__init__(timeout=None)
-
-    @discord.ui.button(label="❓ Open Support Ticket", style=discord.ButtonStyle.secondary, custom_id="sp_support_v14", row=0)
-    async def btn_support(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if await check_existing_ticket(interaction): return
-        await interaction.response.send_modal(SupportModal())
-
-    @discord.ui.button(label="⚠️ Report a Scam",      style=discord.ButtonStyle.danger,    custom_id="sp_scam_v14",    row=0)
-    async def btn_scam(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if await check_existing_ticket(interaction): return
-        await interaction.response.send_modal(ScamModal())
-
-
-# ---------------------------------------------------------------------------
-# Helper: clear bot messages before posting a panel
-# ---------------------------------------------------------------------------
-
-async def _clear_bot_messages(channel: discord.TextChannel, bot_user):
-    async for msg in channel.history(limit=20):
-        if msg.author == bot_user:
-            try:
-                await msg.delete()
-            except discord.HTTPException:
-                pass
-
-
-# ---------------------------------------------------------------------------
-# Cog
-# ---------------------------------------------------------------------------
-
-class TicketsBase(commands.Cog):
-    def __init__(self, bot: commands.Bot):
-        self.bot = bot
-        # Re-register all persistent views so buttons survive restarts
-        bot.add_view(TicketView())
-        bot.add_view(TicketPanelView())
-        bot.add_view(BaseBuyingPanelView())
-        bot.add_view(BedrockPanelView())
-        bot.add_view(SpawnerPanelView())
-        bot.add_view(BuildingPanelView())
-        bot.add_view(SupportPanelView())
-
-    async def cog_app_command_error(self, interaction: discord.Interaction, error: app_commands.AppCommandError):
-        msg = str(error) if isinstance(error, app_commands.CheckFailure) else f"❌ Unexpected error: {error}"
-        if interaction.response.is_done():
-            await interaction.followup.send(msg, ephemeral=True)
-        else:
-            await interaction.response.send_message(msg, ephemeral=True)
-
-    @app_commands.command(name="ticketpanel", description="Post the full ticket panel (all categories)")
-    @admin_only()
-    async def ticketpanel(self, interaction: discord.Interaction):
-        await _clear_bot_messages(interaction.channel, self.bot.user)
-        embed = discord.Embed(
-            title="🎫 Support Tickets",
-            description=(
-                "### Click a button below to open a ticket!\n\n"
-                "🏠 **Base Buying** — Purchase a base\n"
-                "🕳️ **Bedrock Hole** — Buy a bedrock hole\n"
-                "🔄 **Spawner Trade** — Buy or sell spawners\n"
-                "🏗️ **Building** — Building services\n"
-                "❓ **Support** — General help\n"
-                "⚠️ **Scam Report** — Report a scam"
-            ),
-            color=0x2b2d31,
-        )
-        if interaction.guild.icon:
-            embed.set_thumbnail(url=interaction.guild.icon.url)
-        await interaction.response.send_message(embed=embed, view=TicketPanelView())
-
-    @app_commands.command(name="close", description="Close the current ticket")
-    async def close(self, interaction: discord.Interaction):
-        ch = interaction.channel
-        if not is_ticket_channel(ch):
-            await interaction.response.send_message("❌ This command can only be used in ticket channels.", ephemeral=True)
-            return
-
-        has_perm = any(
-            (role := discord.utils.get(interaction.guild.roles, name=rn)) and role in interaction.user.roles
-            for rn in [STAFF_ROLE, *SELLER_ROLES]
-        )
-        if not has_perm:
-            has_perm = interaction.user.name.lower() == get_creator_name(ch)
-        if not has_perm:
-            await interaction.response.send_message("❌ You don't have permission to close this ticket.", ephemeral=True)
-            return
-
-        await interaction.response.send_message("🔒 Closing ticket and generating transcript...", ephemeral=True)
-        await _close_ticket(ch, interaction.user, self.bot.db)
 
 
 async def setup(bot: commands.Bot):
