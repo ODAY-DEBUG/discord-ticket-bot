@@ -1,19 +1,22 @@
 import discord
 from discord.ext import commands
+from discord import app_commands
 import os
 import asyncio
-from dotenv import load_dotenv
-import pymongo
-from pymongo import MongoClient
 import threading
+from dotenv import load_dotenv
+from pymongo import MongoClient
+
+# Import the Flask app from the root directory
 from app import app as flask_app
+
 load_dotenv()
 
 intents = discord.Intents.default()
 intents.message_content = True
 intents.members = True
 intents.guilds = True
-intents.reactions = True  # Make sure this is here for reaction roles!
+intents.reactions = True
 
 COGS = [
     'cogs.moderation',
@@ -29,9 +32,10 @@ COGS = [
     'cogs.welcome',
     'cogs.automod',
     'cogs.logging',
-    'cogs.autorole',      # <-- ADD THIS
-    'cogs.applications',  # ADD THIS
+    'cogs.autorole',
+    'cogs.applications',
 ]
+
 
 class Bot(commands.Bot):
     async def setup_hook(self):
@@ -58,9 +62,20 @@ class Bot(commands.Bot):
             except Exception as e:
                 print(f'❌ Failed to load {cog}: {e}')
 
+        # --- Start Web Dashboard in Background ---
+        def run_web():
+            port = int(os.getenv("PORT", 5000))
+            print(f"🌐 Starting Flask Dashboard on 0.0.0.0:{port}...")
+            try:
+                # debug=False and use_reloader=False are CRITICAL when running inside a bot thread
+                flask_app.run(host='0.0.0.0', port=port, debug=False, use_reloader=False)
+            except Exception as e:
+                print(f"❌ Flask failed to start: {e}")
+        
+        threading.Thread(target=run_web, daemon=True).start()
+
 
 bot = Bot(command_prefix='!', intents=intents, help_command=None)
-
 
 
 @bot.event
@@ -72,7 +87,8 @@ async def on_ready():
     except Exception as e:
         print(f'❌ Global sync failed: {e}')
 
-# --- ADD THIS ENTIRE FUNCTION ---
+
+# --- Global Command Permissions Check ---
 @bot.tree.interaction_check
 async def global_interaction_check(interaction: discord.Interaction) -> bool:
     # 1. Admins ALWAYS have access
@@ -97,7 +113,6 @@ async def global_interaction_check(interaction: discord.Interaction) -> bool:
     
     # 3. If NOT configured on the website, let the bot's default checks handle it
     return True
-# --------------------------------
 
 
 @bot.command(name='sync')
@@ -105,11 +120,11 @@ async def global_interaction_check(interaction: discord.Interaction) -> bool:
 async def sync_commands(ctx):
     msg = await ctx.send('🔄 Wiping old commands, reloading cogs, and syncing...')
     try:
-        # 1. Wipe the internal command tree clean
+        # Wipe the internal command tree clean
         bot.tree.clear_commands(guild=None)
         bot.tree.clear_commands(guild=ctx.guild)
         
-        # 2. Reload all cogs so they re-register their commands into the empty tree
+        # Reload all cogs so they re-register their commands into the empty tree
         for cog in COGS:
             try:
                 await bot.reload_extension(cog)
@@ -117,13 +132,12 @@ async def sync_commands(ctx):
             except Exception as e:
                 print(f'❌ Reload failed for {cog}: {e}')
         
-        # 3. Push the freshly rebuilt command list to Discord
+        # Push the freshly rebuilt command list to Discord
         synced = await bot.tree.sync()
         names = ', '.join(f'/{c.name}' for c in synced)
-        await msg.edit(content=f"✅ Synced {len(synced)} global command(s):\n{names}\n\n*Note: Discord can take up to an hour to remove ghost commands from users' autocomplete, but they will work immediately for you.*")
+        await msg.edit(content=f"✅ Synced {len(synced)} global command(s):\n{names}")
     except Exception as e:
         await msg.edit(content=f'❌ Sync failed: {e}')
-
 
 
 @bot.command(name='reload')
