@@ -6,7 +6,7 @@ from dotenv import load_dotenv
 import pymongo
 from pymongo import MongoClient
 import threading
-from web.app import app as flask_app
+from app import app as flask_app
 load_dotenv()
 
 intents = discord.Intents.default()
