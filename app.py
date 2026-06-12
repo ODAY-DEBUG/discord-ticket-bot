@@ -109,10 +109,19 @@ def guild_dashboard(guild_id):
                 
         elif form_type == "logging":
             channel_id = request.form.get("log_channel_id")
+            transcript_channel_id = request.form.get("TRANSCRIPT_CHANNEL_ID")  # FIX: Get transcript channel
+            
             if channel_id and channel_id != "none":
                 db["log_settings"].update_one({"guild_id": guild_id}, {"$set": {"channel_id": int(channel_id)}}, upsert=True)
             elif channel_id == "none":
                 db["log_settings"].delete_one({"guild_id": guild_id})
+            
+            # FIX: Save transcript channel to bot_config
+            db["bot_config"].update_one(
+                {"guild_id": guild_id},
+                {"$set": {"TRANSCRIPT_CHANNEL_ID": int(transcript_channel_id) if transcript_channel_id and transcript_channel_id != "none" else None}},
+                upsert=True
+            )
                 
         elif form_type == "automod":
             block_links = request.form.get("block_links") == "on"

@@ -84,7 +84,7 @@ def get_guild_config(db, guild_id: int) -> dict:
         "ADMIN_ROLE": config.get("ADMIN_ROLE", DEFAULT_ADMIN_ROLE),
         "TRUSTED_STAFF_ROLE": config.get("TRUSTED_STAFF_ROLE", DEFAULT_TRUSTED_STAFF_ROLE),
         "LOG_CHANNEL_ID": config.get("LOG_CHANNEL_ID"),
-        "TRANSCRIPT_CHANNEL_ID": config.get("TRANSCRIPT_CHANNEL_ID") # <-- ADD THIS
+        "TRANSCRIPT_CHANNEL_ID": config.get("TRANSCRIPT_CHANNEL_ID") # <-- THIS IS CORRECT
     }
 
 # ---------------------------------------------------------------------------

@@ -40,6 +40,7 @@
         .cmd-row:hover { border-color: var(--accent); }
         .cmd-name { font-family: monospace; font-size: 15px; color: var(--accent); }
         .cmd-roles { flex: 1; margin-left: 20px; }
+        .helper-text { color: var(--text-muted); font-size: 12px; display: block; margin-top: 5px; }
     </style>
 </head>
 <body>
@@ -125,16 +126,17 @@
                         {% endfor %}
                     </select>
                 </div>
-	        <!-- ADD THIS NEW DROPDOWN -->
-            	<div class="form-group">
-               	    <label>Ticket Transcripts Channel</label>
+                <!-- FIX: Transcript Channel Dropdown -->
+                <div class="form-group">
+                    <label>Ticket Transcripts Channel</label>
                     <select name="TRANSCRIPT_CHANNEL_ID">
-                    	<option value="none" {% if not settings.config or not settings.config.TRANSCRIPT_CHANNEL_ID %}selected{% endif %}>Disabled</option>
-                    	{% for channel in channels|sort(attribute='position') %}
-                    	<option value="{{ channel.id }}" {% if settings.config and settings.config.TRANSCRIPT_CHANNEL_ID and settings.config.TRANSCRIPT_CHANNEL_ID|string == channel.id|string %}selected{% endif %}># {{ channel.name }}</option>
-                    	{% endfor %}
+                        <option value="none" {% if not settings.config or not settings.config.TRANSCRIPT_CHANNEL_ID %}selected{% endif %}>Use Default Channel</option>
+                        {% for channel in channels|sort(attribute='position') %}
+                        <option value="{{ channel.id }}" {% if settings.config and settings.config.TRANSCRIPT_CHANNEL_ID and settings.config.TRANSCRIPT_CHANNEL_ID|int == channel.id|int %}selected{% endif %}># {{ channel.name }}</option>
+                        {% endfor %}
                     </select>
-            	</div>
+                    <span class="helper-text">If disabled, transcripts will be sent to the default channel configured in the bot.</span>
+                </div>
                 <button type="submit">Save Logging</button>
             </form>
         </div>
@@ -212,7 +214,7 @@
                     {% for cmd in cmds %}
                     <div class="cmd-row" style="flex-direction: column; align-items: flex-start;">
                         <div class="cmd-name" style="margin-bottom: 10px;">/{{ cmd }}</div>
-			<input type="hidden" name="has_cmd_{{ cmd }}" value="1"> <!-- ADD THIS LINE -->
+                        <input type="hidden" name="has_cmd_{{ cmd }}" value="1">
                         <div class="cmd-roles" style="width: 100%; margin-left: 0;">
                             <div class="multiselect-container" style="max-height: 120px; width: 100%; overflow-y: auto; background-color: var(--input-bg); border-radius: 6px; padding: 12px; border: 1px solid var(--border);">
                                 {% for role in roles|sort(attribute='position', reverse=True) %}
