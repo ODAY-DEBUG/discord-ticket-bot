@@ -211,12 +211,11 @@ def guild_dashboard(guild_id):
             app_id = request.form.get("delete_app_id")
             if app_id:
                 db["applications_config"].delete_one({"guild_id": guild_id, "app_id": app_id})
-
         elif form_type == "save_cmd_perms":
-            for key, value in request.form.items():
-                if key.startswith("cmd_"):
-                    command_name = key[4:]
-                    roles = [r.strip() for r in value.split(",") if r.strip()]
+            for key in request.form.keys():
+                if key.startswith("has_cmd_"):
+                    command_name = key[9:] # remove 'has_cmd_'
+                    roles = request.form.getlist(f"cmd_{command_name}")
                     if roles:
                         db["command_perms"].update_one(
                             {"guild_id": guild_id, "command_name": command_name},
@@ -224,9 +223,8 @@ def guild_dashboard(guild_id):
                             upsert=True
                         )
                     else:
+                        # No roles checked, delete override so default bot checks take over
                         db["command_perms"].delete_one({"guild_id": guild_id, "command_name": command_name})
-            
-        return redirect(f"/dashboard/{guild_id}")
 
     # GET Request: Fetch Data for Display
     if not BOT_TOKEN:

@@ -32,7 +32,7 @@ SELLER_ROLES = [BASE_BUYING_ROLE, BEDROCK_ROLE, SPAWNER_ROLE, BUILDING_ROLE]
 
 # Channel names & IDs (Needed for Cogs)
 LOG_CHANNEL = "mod-logs"
-BUILDER_ORDERS_CHANNEL_ID = 1512866063833104384 # Your builder orders channel ID
+BUILDER_ORDERS_CHANNEL_ID = 1512866063833104384
 
 # Ticket channel prefixes
 TICKET_PREFIXES = ("ticket-", "claimed-", "claim-")
@@ -40,6 +40,33 @@ TICKET_PREFIXES = ("ticket-", "claimed-", "claim-")
 # Giveaway settings fallback
 GIVEAWAYS_FILE = "giveaways.json"
 
+
+# ---------------------------------------------------------------------------
+# Dashboard Permission Loader
+# ---------------------------------------------------------------------------
+
+def has_dashboard_override(interaction: discord.Interaction) -> bool | None:
+    """Checks if a command has dashboard overrides.
+    Returns True if user is allowed by dashboard, False if blocked, None if no override."""
+    # Admins always bypass dashboard overrides
+    if interaction.user.guild_permissions.administrator:
+        return True
+        
+    # Check if bot has db attached (safety check)
+    if not hasattr(interaction.client, 'db'):
+        return None
+        
+    override = interaction.client.db["command_perms"].find_one({
+        "guild_id": interaction.guild.id,
+        "command_name": interaction.command.qualified_name
+    })
+    
+    if override:
+        allowed_roles = override.get("roles", [])
+        if has_role(interaction, *allowed_roles):
+            return True
+        return False
+    return None
 
 # ---------------------------------------------------------------------------
 # Dynamic Config Loader (Reads from MongoDB Dashboard)
@@ -68,7 +95,6 @@ def has_role(interaction: discord.Interaction, *role_names: str) -> bool:
     return bool(user_roles & set(role_names))
 
 def is_admin_user(interaction: discord.Interaction) -> bool:
-    # Dynamic check
     cfg = get_guild_config(interaction.client.db, interaction.guild.id)
     return (
         interaction.user.guild_permissions.administrator
@@ -84,23 +110,43 @@ def is_staff_user(interaction: discord.Interaction) -> bool:
     return is_admin_user(interaction) or has_role(interaction, cfg["STAFF_ROLE"])
 
 # ---------------------------------------------------------------------------
-# Reusable app_commands check decorators
+# Reusable app_commands check decorators (NOW DASHBOARD AWARE!)
 # ---------------------------------------------------------------------------
 
 def admin_only():
     async def predicate(interaction: discord.Interaction) -> bool:
+        # 1. Check if dashboard overrides this command
+        override_result = has_dashboard_override(interaction)
+        if override_result is True:
+            return True
+        if override_result is False:
+            raise app_commands.CheckFailure("❌ You don't have the required role (configured on dashboard).")
+        
+        # 2. Fallback to default behavior
         if is_admin_user(interaction): return True
         raise app_commands.CheckFailure("❌ Admins only!")
     return app_commands.check(predicate)
 
 def mod_only():
     async def predicate(interaction: discord.Interaction) -> bool:
+        override_result = has_dashboard_override(interaction)
+        if override_result is True:
+            return True
+        if override_result is False:
+            raise app_commands.CheckFailure("❌ You don't have the required role (configured on dashboard).")
+            
         if is_mod_user(interaction): return True
         raise app_commands.CheckFailure("❌ You need the Moderator or Staff role.")
     return app_commands.check(predicate)
 
 def staff_only():
     async def predicate(interaction: discord.Interaction) -> bool:
+        override_result = has_dashboard_override(interaction)
+        if override_result is True:
+            return True
+        if override_result is False:
+            raise app_commands.CheckFailure("❌ You don't have the required role (configured on dashboard).")
+            
         if is_staff_user(interaction): return True
         raise app_commands.CheckFailure("❌ Staff only!")
     return app_commands.check(predicate)

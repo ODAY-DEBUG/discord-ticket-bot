@@ -5,7 +5,7 @@ import asyncio
 from datetime import datetime, timedelta, timezone
 import random
 from typing import Optional, List
-from cogs.config import STAFF_ROLE
+from cogs.config import STAFF_ROLE, admin_only
 
 # ---------------------------------------------------------------------------
 # Helper
@@ -95,7 +95,7 @@ class Giveaway:
             'description': self.description,
             'host_id': self.host_id,
             'message_id': self.message_id,
-            'entries': self.entries,  # Entries are saved here!
+            'entries': self.entries,
             'ended': self.ended,
             'claim_time_seconds': self.claim_time_seconds,
             'winners': self.winners,
@@ -117,7 +117,7 @@ class Giveaway:
             message_id=data.get('message_id'),
             claim_time_seconds=data.get('claim_time_seconds', 600),
         )
-        giveaway.entries = data.get('entries', [])  # Entries are loaded back!
+        giveaway.entries = data.get('entries', [])
         giveaway.ended = data.get('ended', False)
         giveaway.winners = data.get('winners', [])
         giveaway.announcement_message_id = data.get('announcement_message_id')
@@ -203,20 +203,13 @@ class WinnerClaimView(discord.ui.View):
             await interaction.response.send_message("❌ You are not one of the giveaway winners!", ephemeral=True)
             return
 
+        # Check DB claimed users or runtime claimed users
         giveaway_obj = self.giveaway_data.active_giveaways.get(self.giveaway_message_id)
         if interaction.user.id in self.claimed_users or (giveaway_obj and interaction.user.id in giveaway_obj.claimed_users):
             await interaction.response.send_message("❌ You already claimed your prize!", ephemeral=True)
             return
 
-        # DEFER THE INTERACTION! This gives us 15 minutes instead of 3 seconds.
-        await interaction.response.defer(ephemeral=True)
-
-        try:
-            await self.create_claim_ticket(interaction, interaction.user.id)
-        except Exception as e:
-            # If anything fails, it will tell you exactly what went wrong in Discord
-            print(f"ERROR CREATING CLAIM TICKET: {e}")
-            await interaction.followup.send(f"❌ An error occurred while creating your claim ticket: `{e}`", ephemeral=True)
+        await self.create_claim_ticket(interaction, interaction.user.id)
 
     async def create_claim_ticket(self, interaction: discord.Interaction, winner_id: int):
         guild = interaction.guild
@@ -224,7 +217,7 @@ class WinnerClaimView(discord.ui.View):
 
         for channel in guild.text_channels:
             if channel.name == f"claim-{uname}":
-                await interaction.followup.send(
+                await interaction.response.send_message(
                     f"❌ You already have an open claim ticket: {channel.mention}", ephemeral=True,
                 )
                 return
@@ -256,7 +249,6 @@ class WinnerClaimView(discord.ui.View):
             topic=f"Ticket by {interaction.user.name} | Prize Claim",
         )
 
-        # Build the proof link
         giveaway_link = (
             f"https://discord.com/channels/{guild.id}/"
             f"{self.giveaway_channel_id}/{self.giveaway_message_id}"
@@ -280,28 +272,14 @@ class WinnerClaimView(discord.ui.View):
         if guild.icon:
             embed.set_thumbnail(url=guild.icon.url)
 
-        # Safely try to import the TicketView
-        try:
-            from cogs.tickets_base import TicketView
-            view = TicketView()
-        except Exception as e:
-            print(f"Failed to import TicketView, using fallback: {e}")
-            view = discord.ui.View() # Fallback empty view so it doesn't crash
+        from cogs.tickets_base import TicketView
+        view = TicketView()
+        await ticket.send(embed=embed, view=view)
 
-        # Safely try to send the embed
-        try:
-            await ticket.send(embed=embed, view=view)
-        except Exception as e:
-            print(f"Failed to send ticket embed: {e}")
-
-        # Safely try to send the staff ping
         if staff_role:
-            try:
-                await ticket.send(
-                    f"{staff_role.mention} New giveaway prize claim from {interaction.user.mention}!"
-                )
-            except Exception as e:
-                print(f"Failed to send ticket ping: {e}")
+            await ticket.send(
+                f"{staff_role.mention} New giveaway prize claim from {interaction.user.mention}!"
+            )
 
         self.claimed_users.add(winner_id)
         
@@ -311,9 +289,10 @@ class WinnerClaimView(discord.ui.View):
             giveaway_obj.claimed_users.add(winner_id)
             self.giveaway_data.add_giveaway(self.giveaway_message_id, giveaway_obj)
 
-        await interaction.followup.send(
+        await interaction.response.send_message(
             f"✅ Claim ticket created: {ticket.mention}", ephemeral=True
         )
+
 
 # ---------------------------------------------------------------------------
 # Giveaway Enter Button / View
@@ -335,7 +314,6 @@ class GiveawayButton(discord.ui.Button):
             return
 
         if self.giveaway.add_entry(interaction.user.id):
-            # SAVES TO DB IMMEDIATELY ON ENTRY! (Survives restarts)
             self.giveaway_data.add_giveaway(self.giveaway.message_id, self.giveaway)
             await interaction.response.send_message("✅ You have entered the giveaway! Good luck! 🎉", ephemeral=True)
             
@@ -498,7 +476,8 @@ class Giveaways(commands.Cog):
                         title="🎉 Congratulations! You won a giveaway! 🎉",
                         description=(
                             f"You won **{giveaway.prize}** in **{giveaway.title}**!\n\n"
-                            f"Please go to {channel.mention} and click the **Claim Prize** button to claim your prize.\n\n"
+                            f"Please go to {channel.mention} and click the "
+                            f"**Claim Prize** button to claim your prize.\n\n"
                             f"⏰ Claim deadline: <t:{int(claim_end_time.timestamp())}:R>"
                         ),
                         color=0x00FF00,
@@ -512,24 +491,30 @@ class Giveaways(commands.Cog):
             self.giveaway_data.remove_giveaway(message_id)
 
     # ------------------------------------------------------------------
-    # Slash Commands
+    # Slash Commands (NOW USING DASHBOARD AWARE @admin_only())
     # ------------------------------------------------------------------
 
-    @app_commands.command(name="giveaway", description="Create a new giveaway (Admin only)")
+    @app_commands.command(name="giveaway", description="Create a new giveaway")
     @app_commands.describe(
         channel="Channel to post the giveaway", title="Title of the giveaway", description="Description of the giveaway",
         prize="What users can win", winners="Number of winners", duration_minutes="Minutes until giveaway ends",
         duration_seconds="Seconds until giveaway ends", claim_time_minutes="Minutes winners have to claim their prize (default 10)",
         claim_time_seconds="Extra seconds for claim time (default 0)",
     )
-    async def create_giveaway(self, interaction: discord.Interaction, channel: discord.TextChannel, title: str, description: str,
-                              prize: str, winners: int = 1, duration_minutes: int = 0, duration_seconds: int = 0,
-                              claim_time_minutes: int = 10, claim_time_seconds: int = 0):
-        
-        if not interaction.user.guild_permissions.administrator:
-            await interaction.response.send_message("❌ Admin only command!", ephemeral=True)
-            return
-
+    @admin_only()
+    async def create_giveaway(
+        self,
+        interaction: discord.Interaction,
+        channel: discord.TextChannel,
+        title: str,
+        description: str,
+        prize: str,
+        winners: int = 1,
+        duration_minutes: int = 0,
+        duration_seconds: int = 0,
+        claim_time_minutes: int = 10,
+        claim_time_seconds: int = 0,
+    ):
         total_seconds = (duration_minutes * 60) + duration_seconds
         if total_seconds <= 0:
             await interaction.response.send_message("❌ Please specify a duration greater than 0!", ephemeral=True)
@@ -567,13 +552,10 @@ class Giveaways(commands.Cog):
 
         await interaction.edit_original_response(content=f"✅ Giveaway created in {channel.mention}!")
 
-    @app_commands.command(name="endgiveaway", description="Force end a giveaway early (Admin only)")
+    @app_commands.command(name="endgiveaway", description="Force end a giveaway early")
     @app_commands.describe(message_id="The message ID of the original giveaway")
+    @admin_only()
     async def end_giveaway_early(self, interaction: discord.Interaction, message_id: str):
-        if not interaction.user.guild_permissions.administrator:
-            await interaction.response.send_message("❌ Admin only command!", ephemeral=True)
-            return
-
         try: msg_id = int(message_id)
         except ValueError:
             await interaction.response.send_message("❌ Invalid message ID!", ephemeral=True)
@@ -591,13 +573,10 @@ class Giveaways(commands.Cog):
         await self.end_giveaway(msg_id, giveaway)
         await interaction.response.send_message("✅ Giveaway ended!", ephemeral=True)
 
-    @app_commands.command(name="reroll", description="Reroll a giveaway winner (Admin only)")
+    @app_commands.command(name="reroll", description="Reroll a giveaway winner")
     @app_commands.describe(message_id="The message ID of the ORIGINAL giveaway")
+    @admin_only()
     async def reroll_giveaway(self, interaction: discord.Interaction, message_id: str):
-        if not interaction.user.guild_permissions.administrator:
-            await interaction.response.send_message("❌ Admin only command!", ephemeral=True)
-            return
-
         await interaction.response.defer()
 
         try: msg_id = int(message_id)
@@ -615,7 +594,6 @@ class Giveaways(commands.Cog):
             await interaction.followup.send("❌ This giveaway hasn't ended yet! Use `/endgiveaway` first.", ephemeral=True)
             return
 
-        # --- THE CLAIM CHECK ---
         if giveaway.claimed_users:
             claimers = [f"<@{uid}>" for uid in giveaway.claimed_users]
             await interaction.followup.send(
@@ -624,7 +602,6 @@ class Giveaways(commands.Cog):
             )
             return
 
-        # --- EXCLUDE OLD WINNERS FROM THE POOL ---
         eligible_entries = [uid for uid in set(giveaway.entries) if uid not in giveaway.winners]
         
         if not eligible_entries:
@@ -634,7 +611,6 @@ class Giveaways(commands.Cog):
         actual_winners_count = min(giveaway.winners_count, len(eligible_entries))
         new_winners = random.sample(eligible_entries, actual_winners_count)
 
-        # --- DELETE THE OLD WINNER ANNOUNCEMENT ---
         channel = self.bot.get_channel(giveaway.channel_id)
         if not channel:
             await interaction.followup.send("❌ Giveaway channel not found.", ephemeral=True)
@@ -647,7 +623,6 @@ class Giveaways(commands.Cog):
             except (discord.NotFound, discord.Forbidden, discord.HTTPException):
                 pass
 
-        # --- PERFORM THE REROLL ---
         giveaway.winners = new_winners
         giveaway.claimed_users = set()
         giveaway.claim_end_time = datetime.now(timezone.utc) + timedelta(seconds=giveaway.claim_time_seconds)

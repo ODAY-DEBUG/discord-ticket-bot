@@ -88,31 +88,6 @@ async def on_ready():
         print(f'❌ Global sync failed: {e}')
 
 
-# --- Global Command Permissions Check ---
-@bot.tree.interaction_check
-async def global_interaction_check(interaction: discord.Interaction) -> bool:
-    # 1. Admins ALWAYS have access
-    if interaction.user.guild_permissions.administrator:
-        return True
-
-    command_name = interaction.command.qualified_name
-    
-    # 2. Check if this command has custom role overrides in MongoDB
-    override = bot.db["command_perms"].find_one({
-        "guild_id": interaction.guild.id,
-        "command_name": command_name
-    })
-    
-    if override:
-        # If configured on the website, ONLY allow the selected roles
-        from cogs.config import has_role
-        allowed_roles = override.get("roles", [])
-        if has_role(interaction, *allowed_roles):
-            return True
-        raise app_commands.CheckFailure("❌ You don't have the required role for this command.")
-    
-    # 3. If NOT configured on the website, let the bot's default checks handle it
-    return True
 
 
 @bot.command(name='sync')
