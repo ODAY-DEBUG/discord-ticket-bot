@@ -159,7 +159,6 @@ async def _close_ticket(channel: discord.TextChannel, closed_by: discord.Member,
                     description=f"Your ticket in **{guild.name}** was closed by {closed_by.mention}. Here is your transcript:",
                     color=0x2b2d31
                 )
-                # We need to create a new file object because discord.py consumes the old one
                 dm_file = discord.File(fp=io.BytesIO(transcript_bytes), filename=f"transcript-{channel.name}.txt")
                 await creator_member.send(embed=dm_embed, file=dm_file)
             except discord.HTTPException:
@@ -175,8 +174,9 @@ async def _close_ticket(channel: discord.TextChannel, closed_by: discord.Member,
     except Exception as e:
         print(f"Error deleting channel: {e}")
 
+
 # ---------------------------------------------------------------------------
-# Modals — one per category (Keep exactly as you have them)
+# Modals — one per category (Keep as is)
 # ---------------------------------------------------------------------------
 
 class BaseBuyingModal(discord.ui.Modal, title="🏠 Base Buying Ticket"):
@@ -301,11 +301,11 @@ class TicketView(discord.ui.View):
             return
         
         await interaction.response.send_message("🔒 Closing ticket and generating transcript...", ephemeral=True)
-        await _close_ticket(interaction.channel, interaction.user, interaction.client.db) # <-- ADDED DB
+        await _close_ticket(interaction.channel, interaction.user, interaction.client.db)
 
 
 # ---------------------------------------------------------------------------
-# Panel views — buttons open modals (Keep exactly as you have them)
+# Panel views — buttons open modals (Keep as is)
 # ---------------------------------------------------------------------------
 
 class TicketPanelView(discord.ui.View):
@@ -418,6 +418,7 @@ async def _clear_bot_messages(channel: discord.TextChannel, bot_user):
 class TicketsBase(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
+        # Re-register all persistent views so buttons survive restarts
         bot.add_view(TicketView())
         bot.add_view(TicketPanelView())
         bot.add_view(BaseBuyingPanelView())
@@ -472,7 +473,7 @@ class TicketsBase(commands.Cog):
             return
 
         await interaction.response.send_message("🔒 Closing ticket and generating transcript...", ephemeral=True)
-        await _close_ticket(ch, interaction.user, self.bot.db) # <-- ADDED DB
+        await _close_ticket(ch, interaction.user, self.bot.db)
 
 
 async def setup(bot: commands.Bot):

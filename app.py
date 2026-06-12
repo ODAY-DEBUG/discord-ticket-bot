@@ -143,7 +143,7 @@ def guild_dashboard(guild_id):
             admin_role = request.form.get("ADMIN_ROLE")
             trusted_staff_role = request.form.get("TRUSTED_STAFF_ROLE")
             log_channel_id = request.form.get("LOG_CHANNEL_ID")
-            transcript_channel_id = request.form.get("TRANSCRIPT_CHANNEL_ID") # <-- ADD THIS
+            transcript_channel_id = request.form.get("TRANSCRIPT_CHANNEL_ID")
             
             db["bot_config"].update_one(
                 {"guild_id": guild_id},
@@ -153,7 +153,7 @@ def guild_dashboard(guild_id):
                     "ADMIN_ROLE": admin_role,
                     "TRUSTED_STAFF_ROLE": trusted_staff_role,
                     "LOG_CHANNEL_ID": int(log_channel_id) if log_channel_id and log_channel_id != "none" else None,
-                    "TRANSCRIPT_CHANNEL_ID": int(transcript_channel_id) if transcript_channel_id and transcript_channel_id != "none" else None # <-- ADD THIS
+                    "TRANSCRIPT_CHANNEL_ID": int(transcript_channel_id) if transcript_channel_id and transcript_channel_id != "none" else None
                 }},
                 upsert=True
             )
@@ -215,7 +215,7 @@ def guild_dashboard(guild_id):
         elif form_type == "save_cmd_perms":
             for key in request.form.keys():
                 if key.startswith("has_cmd_"):
-                    command_name = key[9:] # remove 'has_cmd_'
+                    command_name = key[9:]
                     roles = request.form.getlist(f"cmd_{command_name}")
                     if roles:
                         db["command_perms"].update_one(
@@ -224,7 +224,6 @@ def guild_dashboard(guild_id):
                             upsert=True
                         )
                     else:
-                        # No roles checked, delete override so default bot checks take over
                         db["command_perms"].delete_one({"guild_id": guild_id, "command_name": command_name})
 
     # GET Request: Fetch Data for Display
@@ -240,7 +239,7 @@ def guild_dashboard(guild_id):
     roles = roles_res.json() if roles_res.status_code == 200 else []
     roles = [r for r in roles if r["name"] != "@everyone" and not r["managed"]]
     
-    print(f"🔍 DEBUG: Fetched {len(roles)} roles for guild {guild_id}") # <-- ADD THIS
+    print(f"🔍 DEBUG: Fetched {len(roles)} roles for guild {guild_id}")
     
     # Fetch Channels
     chans_res = requests.get(f"https://discord.com/api/v10/guilds/{guild_id}/channels", headers=bot_headers)
@@ -249,7 +248,7 @@ def guild_dashboard(guild_id):
     channels = chans_res.json() if chans_res.status_code == 200 else []
     text_channels = [c for c in channels if c["type"] == 0]
 
-    print(f"🔍 DEBUG: Fetched {len(text_channels)} channels for guild {guild_id}") # <-- ADD THIS
+    print(f"🔍 DEBUG: Fetched {len(text_channels)} channels for guild {guild_id}")
 
     # Fetch Settings
     settings = {
@@ -257,7 +256,14 @@ def guild_dashboard(guild_id):
         "welcome": db["welcome_settings"].find_one({"guild_id": guild_id}),
         "logging": db["log_settings"].find_one({"guild_id": guild_id}),
         "automod": db["automod_settings"].find_one({"guild_id": guild_id}),
-        "config": db["bot_config"].find_one({"guild_id": guild_id}),
+        "config": (lambda cfg: {
+            "STAFF_ROLE": cfg.get("STAFF_ROLE", "Staff"),
+            "MOD_ROLE": cfg.get("MOD_ROLE", "Moderator"),
+            "ADMIN_ROLE": cfg.get("ADMIN_ROLE", "Admin"),
+            "TRUSTED_STAFF_ROLE": cfg.get("TRUSTED_STAFF_ROLE", "Trusted Staff"),
+            "LOG_CHANNEL_ID": cfg.get("LOG_CHANNEL_ID"),
+            "TRANSCRIPT_CHANNEL_ID": cfg.get("TRANSCRIPT_CHANNEL_ID")
+        })(db["bot_config"].find_one({"guild_id": guild_id}) or {}),
         "applications": list(db["applications_config"].find({"guild_id": guild_id})),
         "command_perms": {doc["command_name"]: doc["roles"] for doc in db["command_perms"].find({"guild_id": guild_id})}
     }
