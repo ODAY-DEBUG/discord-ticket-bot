@@ -544,13 +544,20 @@ class Giveaways(commands.Cog):
 
         await interaction.response.send_message("✅ Creating giveaway...", ephemeral=True)
 
-        view = GiveawayView(self.giveaway_data, giveaway)
-        message = await channel.send(embed=embed, view=view)
+        # 1. Send the message WITHOUT the view first so we can get the real Message ID
+        message = await channel.send(embed=embed)
 
+        # 2. Update the giveaway object with the real message ID and save to DB
         giveaway.message_id = message.id
         self.giveaway_data.add_giveaway(message.id, giveaway)
 
-        await interaction.edit_original_response(content=f"✅ Giveaway created in {channel.mention}!")
+        # 3. Now create the view with the correct custom_id and edit the message to attach it
+        view = GiveawayView(self.giveaway_data, giveaway)
+        await message.edit(view=view)
+
+        await interaction.edit_original_response(
+            content=f"✅ Giveaway created in {channel.mention}!"
+        )
 
     @app_commands.command(name="endgiveaway", description="Force end a giveaway early")
     @app_commands.describe(message_id="The message ID of the original giveaway")
