@@ -5,7 +5,7 @@ import os
 import asyncio
 import threading
 from dotenv import load_dotenv
-from pymongo import MongoClient
+from db import get_bot_token, get_db
 
 # Import the Flask app from the root directory
 from app import app as flask_app
@@ -40,16 +40,12 @@ COGS = [
 class Bot(commands.Bot):
     async def setup_hook(self):
         # --- MongoDB Setup ---
-        mongo_uri = os.getenv("MONGO_URI")
-        if not mongo_uri:
+        self.db = get_db()
+        if self.db is None:
             print("❌ MONGO_URI environment variable is not set!")
         else:
             try:
-                self.mongo_client = MongoClient(mongo_uri)
-                # The database name will be "discord_bot"
-                self.db = self.mongo_client["discord_bot"]
-                # Test the connection
-                self.mongo_client.admin.command('ping')
+                self.db.client.admin.command('ping')
                 print("✅ Successfully connected to MongoDB!")
             except Exception as e:
                 print(f"❌ Failed to connect to MongoDB: {e}")
@@ -137,9 +133,9 @@ async def list_cogs(ctx):
 
 
 def main():
-    token = os.getenv('DISCORD_TOKEN')
+    token = get_bot_token()
     if not token:
-        raise RuntimeError('DISCORD_TOKEN environment variable is not set.')
+        raise RuntimeError('DISCORD_BOT_TOKEN or DISCORD_TOKEN environment variable is not set.')
 
     async def run_bot():
         async with bot:

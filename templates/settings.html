@@ -135,7 +135,7 @@
                         <option value="{{ channel.id }}" {% if settings.config and settings.config.TRANSCRIPT_CHANNEL_ID and settings.config.TRANSCRIPT_CHANNEL_ID|int == channel.id|int %}selected{% endif %}># {{ channel.name }}</option>
                         {% endfor %}
                     </select>
-                    <span class="helper-text">If disabled, transcripts will be sent to the default channel configured in the bot.</span>
+                    <span class="helper-text">If disabled, transcripts are skipped unless DEFAULT_TRANSCRIPT_CHANNEL_ID is set in the environment.</span>
                 </div>
                 <button type="submit">Save Logging</button>
             </form>
@@ -185,6 +185,25 @@
                         <option value="{{ channel.id }}" {% if settings.config and settings.config.LOG_CHANNEL_ID and settings.config.LOG_CHANNEL_ID|string == channel.id|string %}selected{% endif %}># {{ channel.name }}</option>
                         {% endfor %}
                     </select>
+                </div>
+                <div class="form-group">
+                    <label>Ticket Transcripts Channel</label>
+                    <select name="TRANSCRIPT_CHANNEL_ID">
+                        <option value="none" {% if not settings.config or not settings.config.TRANSCRIPT_CHANNEL_ID %}selected{% endif %}>Disabled</option>
+                        {% for channel in channels|sort(attribute='position') %}
+                        <option value="{{ channel.id }}" {% if settings.config and settings.config.TRANSCRIPT_CHANNEL_ID and settings.config.TRANSCRIPT_CHANNEL_ID|int == channel.id|int %}selected{% endif %}># {{ channel.name }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label>Builder Orders Channel</label>
+                    <select name="BUILDER_ORDERS_CHANNEL_ID">
+                        <option value="none" {% if not settings.config or not settings.config.BUILDER_ORDERS_CHANNEL_ID %}selected{% endif %}>Disabled</option>
+                        {% for channel in channels|sort(attribute='position') %}
+                        <option value="{{ channel.id }}" {% if settings.config and settings.config.BUILDER_ORDERS_CHANNEL_ID and settings.config.BUILDER_ORDERS_CHANNEL_ID|int == channel.id|int %}selected{% endif %}># {{ channel.name }}</option>
+                        {% endfor %}
+                    </select>
+                    <span class="helper-text">Where new building tickets are posted for builders to claim.</span>
                 </div>
                 <button type="submit">Save Config</button>
             </form>

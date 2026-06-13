@@ -1,7 +1,7 @@
 import discord
 from discord.ext import commands
 from datetime import datetime, timezone
-from cogs.config import TRUSTED_STAFF_ROLE
+from cogs.config import get_guild_config
 
 # ---------------------------------------------------------------------------
 # Application Views
@@ -77,8 +77,29 @@ class ApplicationActionView(discord.ui.View):
         self.applicant_id = applicant_id
         self.app_config = app_config
 
-    @discord.ui.button(label="✅ Accept", style=discord.ButtonStyle.green, custom_id="app_accept")
-    async def accept_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
+        accept_btn = discord.ui.Button(
+            label="✅ Accept",
+            style=discord.ButtonStyle.green,
+            custom_id=f"app_accept_{app_id}_{applicant_id}",
+        )
+        deny_btn = discord.ui.Button(
+            label="❌ Deny",
+            style=discord.ButtonStyle.red,
+            custom_id=f"app_deny_{app_id}_{applicant_id}",
+        )
+        ticket_btn = discord.ui.Button(
+            label="🎫 Open Ticket",
+            style=discord.ButtonStyle.grey,
+            custom_id=f"app_ticket_{app_id}_{applicant_id}",
+        )
+        accept_btn.callback = self.accept_btn
+        deny_btn.callback = self.deny_btn
+        ticket_btn.callback = self.ticket_btn
+        self.add_item(accept_btn)
+        self.add_item(deny_btn)
+        self.add_item(ticket_btn)
+
+    async def accept_btn(self, interaction: discord.Interaction):
         if not interaction.user.guild_permissions.administrator:
             return await interaction.response.send_message("❌ Admins only.", ephemeral=True)
 
@@ -96,10 +117,13 @@ class ApplicationActionView(discord.ui.View):
         except: pass
 
         await interaction.message.edit(view=None, content="✅ Application Accepted.")
+        interaction.client.db["application_reviews"].update_one(
+            {"message_id": interaction.message.id},
+            {"$set": {"resolved": True}},
+        )
         await interaction.response.defer()
 
-    @discord.ui.button(label="❌ Deny", style=discord.ButtonStyle.red, custom_id="app_deny")
-    async def deny_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
+    async def deny_btn(self, interaction: discord.Interaction):
         if not interaction.user.guild_permissions.administrator:
             return await interaction.response.send_message("❌ Admins only.", ephemeral=True)
 
@@ -117,10 +141,13 @@ class ApplicationActionView(discord.ui.View):
         except: pass
 
         await interaction.message.edit(view=None, content="❌ Application Denied.")
+        interaction.client.db["application_reviews"].update_one(
+            {"message_id": interaction.message.id},
+            {"$set": {"resolved": True}},
+        )
         await interaction.response.defer()
 
-    @discord.ui.button(label="🎫 Open Ticket", style=discord.ButtonStyle.grey, custom_id="app_ticket")
-    async def ticket_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
+    async def ticket_btn(self, interaction: discord.Interaction):
         if not interaction.user.guild_permissions.administrator:
             return await interaction.response.send_message("❌ Admins only.", ephemeral=True)
 
@@ -133,7 +160,8 @@ class ApplicationActionView(discord.ui.View):
             cat = await guild.create_category("Application Tickets")
             await cat.set_permissions(guild.default_role, read_messages=False)
 
-        trusted_role = discord.utils.get(guild.roles, name=TRUSTED_STAFF_ROLE)
+        trusted_role_name = get_guild_config(interaction.client.db, guild.id)["TRUSTED_STAFF_ROLE"]
+        trusted_role = discord.utils.get(guild.roles, name=trusted_role_name)
         overwrites = {
             guild.default_role: discord.PermissionOverwrite(read_messages=False),
             applicant: discord.PermissionOverwrite(read_messages=True, send_messages=True, read_message_history=True, attach_files=True),
@@ -152,8 +180,10 @@ class ApplicationActionView(discord.ui.View):
         view = TicketView()
         await channel.send(embed=embed, view=view)
 
-        button.disabled = True
-        button.label = "Ticket Opened"
+        button = discord.utils.get(self.children, custom_id=f"app_ticket_{self.app_id}_{self.applicant_id}")
+        if button:
+            button.disabled = True
+            button.label = "Ticket Opened"
         await interaction.response.edit_message(view=self)
         await interaction.followup.send(f"✅ Ticket created: {channel.mention}", ephemeral=True)
 
@@ -165,10 +195,15 @@ class ApplicationActionView(discord.ui.View):
 class Applications(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
-        # Load Panel views on startup so buttons work
         try:
             for app in bot.db["applications_config"].find():
                 bot.add_view(ApplyPanelView(app["app_id"], app["app_name"]))
+            for review in bot.db["application_reviews"].find({"resolved": False}):
+                app_config = bot.db["applications_config"].find_one(
+                    {"guild_id": review["guild_id"], "app_id": review["app_id"]}
+                )
+                if app_config:
+                    bot.add_view(ApplicationActionView(review["app_id"], review["applicant_id"], app_config))
             print("✅ Loaded Application Panel views.")
         except Exception as e:
             print(f"❌ Failed to load application views: {e}")
@@ -256,11 +291,23 @@ class Applications(commands.Cog):
             # Send to submitted channel
             submitted_channel = self.bot.get_channel(app_config.get("submitted_channel_id"))
             if submitted_channel:
-                trusted_role = discord.utils.get(submitted_channel.guild.roles, name=TRUSTED_STAFF_ROLE)
-                mention = trusted_role.mention if trusted_role else "@Trusted Staff"
+                trusted_role_name = get_guild_config(self.bot.db, submitted_channel.guild.id)["TRUSTED_STAFF_ROLE"]
+                trusted_role = discord.utils.get(submitted_channel.guild.roles, name=trusted_role_name)
+                mention = trusted_role.mention if trusted_role else f"@{trusted_role_name}"
                 
                 view = ApplicationActionView(session["app_id"], message.author.id, app_config)
-                await submitted_channel.send(content=mention, embed=embed, view=view)
+                review_msg = await submitted_channel.send(content=mention, embed=embed, view=view)
+                self.bot.db["application_reviews"].update_one(
+                    {"message_id": review_msg.id},
+                    {"$set": {
+                        "guild_id": session["guild_id"],
+                        "app_id": session["app_id"],
+                        "applicant_id": message.author.id,
+                        "resolved": False,
+                    }},
+                    upsert=True,
+                )
+                self.bot.add_view(view)
 
 async def setup(bot: commands.Bot):
     await bot.add_cog(Applications(bot))

@@ -1,8 +1,8 @@
 import os
 from flask import Flask, render_template, redirect, request, session
 import requests
-from pymongo import MongoClient
 from dotenv import load_dotenv
+from db import get_bot_token, get_db
 
 load_dotenv()
 
@@ -17,12 +17,10 @@ app.config['SESSION_COOKIE_SAMESITE'] = 'Lax'
 CLIENT_ID = os.getenv("CLIENT_ID")
 CLIENT_SECRET = os.getenv("CLIENT_SECRET")
 REDIRECT_URI = os.getenv("REDIRECT_URI")
-BOT_TOKEN = os.getenv("DISCORD_BOT_TOKEN")
+BOT_TOKEN = get_bot_token()
 
-# Connect to MongoDB
-MONGO_URI = os.getenv("MONGO_URI")
-mongo_client = MongoClient(MONGO_URI)
-db = mongo_client["discord_bot"] 
+# Connect to MongoDB (shared singleton with the bot)
+db = get_db()
 
 @app.route("/")
 def index():
@@ -153,7 +151,8 @@ def guild_dashboard(guild_id):
             trusted_staff_role = request.form.get("TRUSTED_STAFF_ROLE")
             log_channel_id = request.form.get("LOG_CHANNEL_ID")
             transcript_channel_id = request.form.get("TRANSCRIPT_CHANNEL_ID")
-            
+            builder_orders_channel_id = request.form.get("BUILDER_ORDERS_CHANNEL_ID")
+
             db["bot_config"].update_one(
                 {"guild_id": guild_id},
                 {"$set": {
@@ -162,7 +161,8 @@ def guild_dashboard(guild_id):
                     "ADMIN_ROLE": admin_role,
                     "TRUSTED_STAFF_ROLE": trusted_staff_role,
                     "LOG_CHANNEL_ID": int(log_channel_id) if log_channel_id and log_channel_id != "none" else None,
-                    "TRANSCRIPT_CHANNEL_ID": int(transcript_channel_id) if transcript_channel_id and transcript_channel_id != "none" else None
+                    "TRANSCRIPT_CHANNEL_ID": int(transcript_channel_id) if transcript_channel_id and transcript_channel_id != "none" else None,
+                    "BUILDER_ORDERS_CHANNEL_ID": int(builder_orders_channel_id) if builder_orders_channel_id and builder_orders_channel_id != "none" else None,
                 }},
                 upsert=True
             )
@@ -237,7 +237,7 @@ def guild_dashboard(guild_id):
 
     # GET Request: Fetch Data for Display
     if not BOT_TOKEN:
-        return "<h1>Error: DISCORD_BOT_TOKEN is missing from Render Environment Variables!</h1>", 500
+        return "<h1>Error: DISCORD_BOT_TOKEN or DISCORD_TOKEN is missing from environment variables!</h1>", 500
 
     bot_headers = {"Authorization": f"Bot {BOT_TOKEN}", "User-Agent": "DashboardBot/1.0"}
     
@@ -271,7 +271,8 @@ def guild_dashboard(guild_id):
             "ADMIN_ROLE": cfg.get("ADMIN_ROLE", "Admin"),
             "TRUSTED_STAFF_ROLE": cfg.get("TRUSTED_STAFF_ROLE", "Trusted Staff"),
             "LOG_CHANNEL_ID": cfg.get("LOG_CHANNEL_ID"),
-            "TRANSCRIPT_CHANNEL_ID": cfg.get("TRANSCRIPT_CHANNEL_ID")
+            "TRANSCRIPT_CHANNEL_ID": cfg.get("TRANSCRIPT_CHANNEL_ID"),
+            "BUILDER_ORDERS_CHANNEL_ID": cfg.get("BUILDER_ORDERS_CHANNEL_ID"),
         })(db["bot_config"].find_one({"guild_id": guild_id}) or {}),
         "applications": list(db["applications_config"].find({"guild_id": guild_id})),
         "command_perms": {doc["command_name"]: doc["roles"] for doc in db["command_perms"].find({"guild_id": guild_id})}

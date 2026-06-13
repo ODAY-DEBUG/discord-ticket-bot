@@ -5,7 +5,7 @@ import asyncio
 from datetime import datetime, timedelta, timezone
 import random
 from typing import Optional, List
-from cogs.config import STAFF_ROLE, admin_only
+from cogs.config import admin_only, get_guild_config
 
 # ---------------------------------------------------------------------------
 # Helper
@@ -235,7 +235,8 @@ class WinnerClaimView(discord.ui.View):
             ),
         }
 
-        staff_role = discord.utils.get(guild.roles, name=STAFF_ROLE)
+        staff_role_name = get_guild_config(interaction.client.db, guild.id)["STAFF_ROLE"]
+        staff_role = discord.utils.get(guild.roles, name=staff_role_name)
         if staff_role:
             overwrites[staff_role] = discord.PermissionOverwrite(
                 read_messages=True, send_messages=True,

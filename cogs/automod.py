@@ -3,16 +3,12 @@ from discord.ext import commands
 from discord import app_commands
 import re
 from datetime import datetime, timezone
-from cogs.config import STAFF_ROLE, admin_only
+from cogs.config import admin_only, get_guild_config, member_has_role
 
 class AutoMod(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
         self.db = bot.db
-
-    # ---------------------------------------------------------------------------
-    # Grouped Commands: /automod ...
-    # ---------------------------------------------------------------------------
 
     automod_group = app_commands.Group(name="automod", description="Configure Auto-Moderation settings")
 
@@ -151,12 +147,10 @@ class AutoMod(commands.Cog):
         if message.author.bot or not message.guild:
             return
 
-        # 1. Exclude Staff Role
-        staff_role = discord.utils.get(message.author.roles, name=STAFF_ROLE)
-        if staff_role or message.author.guild_permissions.administrator:
+        staff_role_name = get_guild_config(self.bot.db, message.guild.id)["STAFF_ROLE"]
+        if member_has_role(message.author, staff_role_name) or message.author.guild_permissions.administrator:
             return
 
-        # 2. Check if this channel is monitored
         settings = self.get_settings(message.guild.id)
         if not settings:
             return

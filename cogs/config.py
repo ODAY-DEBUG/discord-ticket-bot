@@ -3,6 +3,8 @@ config.py — Central configuration for roles, permissions, and settings.
 Now supports dynamic overrides from the Web Dashboard (MongoDB)!
 """
 
+import os
+
 import discord
 from discord import app_commands
 
@@ -30,9 +32,8 @@ OWNER_ROLE        = "👑 Owner"
 
 SELLER_ROLES = [BASE_BUYING_ROLE, BEDROCK_ROLE, SPAWNER_ROLE, BUILDING_ROLE]
 
-# Channel names & IDs (Needed for Cogs)
+# Channel names (Needed for Cogs)
 LOG_CHANNEL = "mod-logs"
-BUILDER_ORDERS_CHANNEL_ID = 1512866063833104384
 
 # Ticket channel prefixes
 TICKET_PREFIXES = ("ticket-", "claimed-", "claim-")
@@ -72,20 +73,56 @@ def has_dashboard_override(interaction: discord.Interaction) -> bool | None:
 # Dynamic Config Loader (Reads from MongoDB Dashboard)
 # ---------------------------------------------------------------------------
 
+def _parse_channel_id(value) -> int | None:
+    if value is None or value == "" or value == "none":
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
 def get_guild_config(db, guild_id: int) -> dict:
     """Fetches dynamic config from MongoDB. Falls back to defaults if not found."""
-    config = db["bot_config"].find_one({"guild_id": guild_id})
+    config = db["bot_config"].find_one({"guild_id": guild_id}) if db is not None else {}
     if not config:
         config = {}
-    
+
+    builder_orders_id = _parse_channel_id(config.get("BUILDER_ORDERS_CHANNEL_ID"))
+    if builder_orders_id is None:
+        builder_orders_id = _parse_channel_id(os.getenv("BUILDER_ORDERS_CHANNEL_ID"))
+
+    transcript_id = _parse_channel_id(config.get("TRANSCRIPT_CHANNEL_ID"))
+    if transcript_id is None:
+        transcript_id = _parse_channel_id(os.getenv("DEFAULT_TRANSCRIPT_CHANNEL_ID"))
+
     return {
         "STAFF_ROLE": config.get("STAFF_ROLE", DEFAULT_STAFF_ROLE),
         "MOD_ROLE": config.get("MOD_ROLE", DEFAULT_MOD_ROLE),
         "ADMIN_ROLE": config.get("ADMIN_ROLE", DEFAULT_ADMIN_ROLE),
         "TRUSTED_STAFF_ROLE": config.get("TRUSTED_STAFF_ROLE", DEFAULT_TRUSTED_STAFF_ROLE),
-        "LOG_CHANNEL_ID": config.get("LOG_CHANNEL_ID"),
-        "TRANSCRIPT_CHANNEL_ID": config.get("TRANSCRIPT_CHANNEL_ID") # <-- THIS IS CORRECT
+        "LOG_CHANNEL_ID": _parse_channel_id(config.get("LOG_CHANNEL_ID")),
+        "TRANSCRIPT_CHANNEL_ID": transcript_id,
+        "BUILDER_ORDERS_CHANNEL_ID": builder_orders_id,
     }
+
+
+def resolve_role_names(db, guild_id: int, role_names: list[str]) -> list[str]:
+    """Map default role name placeholders to dashboard-configured names."""
+    cfg = get_guild_config(db, guild_id)
+    resolved = []
+    for name in role_names:
+        if name == DEFAULT_STAFF_ROLE:
+            resolved.append(cfg["STAFF_ROLE"])
+        elif name == DEFAULT_TRUSTED_STAFF_ROLE:
+            resolved.append(cfg["TRUSTED_STAFF_ROLE"])
+        else:
+            resolved.append(name)
+    return resolved
+
+
+def member_has_role(member: discord.Member, role_name: str) -> bool:
+    return any(r.name == role_name for r in member.roles)
 
 # ---------------------------------------------------------------------------
 # Permission check helpers

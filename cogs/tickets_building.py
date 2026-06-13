@@ -1,7 +1,7 @@
 import discord
 from discord.ext import commands
 from datetime import datetime, timezone
-from cogs.config import OWNER_ROLE, BUILDING_ROLE, BUILDER_ORDERS_CHANNEL_ID
+from cogs.config import OWNER_ROLE, BUILDING_ROLE, get_guild_config
 from cogs.tickets_base import TicketView
 
 # ---------------------------------------------------------------------------
@@ -218,12 +218,13 @@ async def create_builder_ticket(interaction: discord.Interaction, answers: dict)
     await interaction.followup.send(f"✅ Ticket created: {channel.mention}", ephemeral=True)
 
     # --- SEND ORDER TO ORDERS CHANNEL ---
-    orders_channel = guild.get_channel(BUILDER_ORDERS_CHANNEL_ID)
+    orders_channel_id = get_guild_config(interaction.client.db, guild.id).get("BUILDER_ORDERS_CHANNEL_ID")
+    orders_channel = guild.get_channel(orders_channel_id) if orders_channel_id else None
     if orders_channel:
         ign = answers.get("What is your IGN?", "N/A")
         budget = answers.get("What is your budget?", "N/A")
-        base_type = answers.get("What type of base do you need?", "N/A")
-        requirements = answers.get("Do you have any specific requirements?", "None")
+        base_type = answers.get("What base do you need?", "N/A")
+        requirements = answers.get("Specific requirements?", "None")
         how_soon = answers.get("How soon do you need the base?", "N/A")
         
         order_embed = discord.Embed(
@@ -256,8 +257,8 @@ async def create_builder_ticket(interaction: discord.Interaction, answers: dict)
         if builder_role:
             await orders_channel.send(f"{builder_role.mention} New order available above! ⬆️")
             
-    else:
-        print(f"❌ Builder Orders channel {BUILDER_ORDERS_CHANNEL_ID} not found!")
+    elif orders_channel_id:
+        print(f"❌ Builder Orders channel {orders_channel_id} not found!")
 
 
 # ---------------------------------------------------------------------------

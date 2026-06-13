@@ -3,7 +3,7 @@ from discord.ext import commands
 from discord import app_commands
 from datetime import datetime, timezone, timedelta
 from collections import defaultdict
-from cogs.config import STAFF_ROLE, LOG_CHANNEL, mod_only, get_guild_config
+from cogs.config import mod_only, get_guild_config
 # ---------------------------------------------------------------------------
 # Persistence for Warnings (MongoDB)
 # ---------------------------------------------------------------------------
@@ -428,7 +428,9 @@ class Moderation(commands.Cog):
     @mod_only()
     async def lock(self, interaction: discord.Interaction, reason: str = "No reason provided."):
         channel = interaction.channel
-        staff_role = discord.utils.get(interaction.guild.roles, name=STAFF_ROLE)
+        cfg = get_guild_config(interaction.client.db, interaction.guild.id)
+        staff_role_name = cfg["STAFF_ROLE"]
+        staff_role = discord.utils.get(interaction.guild.roles, name=staff_role_name)
         everyone = interaction.guild.default_role
 
         # Safely check current overwrite status
@@ -438,7 +440,7 @@ class Moderation(commands.Cog):
             return
 
         if not staff_role:
-            await interaction.response.send_message(f"❌ Staff role '{STAFF_ROLE}' not found. Please create it first.", ephemeral=True)
+            await interaction.response.send_message(f"❌ Staff role '{staff_role_name}' not found. Please create it first.", ephemeral=True)
             return
 
         try:

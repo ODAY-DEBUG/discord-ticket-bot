@@ -11,12 +11,8 @@ from cogs.config import (
     staff_only,
     admin_only,
     get_guild_config,
+    resolve_role_names,
 )
-
-# ---------------------------------------------------------------------------
-# Configuration - Set your default transcript channel ID here
-# ---------------------------------------------------------------------------
-DEFAULT_TRANSCRIPT_CHANNEL_ID = 1515122425556111511 # Replace with your actual default channel ID
 
 # ---------------------------------------------------------------------------
 # Shared helpers
@@ -40,6 +36,10 @@ def is_ticket_channel(channel: discord.TextChannel) -> bool:
 async def create_ticket_channel(interaction: discord.Interaction, cfg: dict, category: str, answers: dict):
     """Creates the ticket channel and posts the answers embed."""
     uname = interaction.user.name.lower()
+    db = interaction.client.db
+    allow_roles = resolve_role_names(db, interaction.guild.id, cfg["allow"])
+    ping_roles = resolve_role_names(db, interaction.guild.id, cfg["ping"])
+
     dc_cat = discord.utils.get(interaction.guild.categories, name=cfg["cat"])
     if not dc_cat:
         dc_cat = await interaction.guild.create_category(cfg["cat"])
@@ -54,7 +54,7 @@ async def create_ticket_channel(interaction: discord.Interaction, cfg: dict, cat
             attach_files=True,
         ),
     }
-    for role_name in cfg["allow"]:
+    for role_name in allow_roles:
         role = discord.utils.get(interaction.guild.roles, name=role_name)
         if role:
             overwrites[role] = discord.PermissionOverwrite(
@@ -89,7 +89,7 @@ async def create_ticket_channel(interaction: discord.Interaction, cfg: dict, cat
     view = TicketView()
     await channel.send(embed=embed, view=view)
     mentions = " ".join(
-        role.mention for rn in cfg["ping"] if (role := discord.utils.get(interaction.guild.roles, name=rn))
+        role.mention for rn in ping_roles if (role := discord.utils.get(interaction.guild.roles, name=rn))
     )
     if mentions:
         await channel.send(f"{mentions}\nNew **{category}** ticket from {interaction.user.mention}!")
@@ -136,11 +136,6 @@ async def _close_ticket(channel: discord.TextChannel, closed_by: discord.Member,
     try:
         cfg = get_guild_config(db, guild.id)
         transcript_channel_id = cfg.get("TRANSCRIPT_CHANNEL_ID")
-
-        # Set default if null or not configured
-        if transcript_channel_id is None:
-            transcript_channel_id = DEFAULT_TRANSCRIPT_CHANNEL_ID
-            print(f"Using default transcript channel ID: {transcript_channel_id}")
 
         if transcript_channel_id:
             t_channel = guild.get_channel(transcript_channel_id)
@@ -241,8 +236,8 @@ class BuildingModal(discord.ui.Modal, title="🏗️ Building Ticket"):
 
     async def on_submit(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
-        from cogs.tickets_building import BUILDING_CFG
-        await create_ticket_channel(interaction, BUILDING_CFG, "Building", {
+        from cogs.tickets_building import create_builder_ticket
+        await create_builder_ticket(interaction, {
             self.q1.label: self.q1.value,
             self.q2.label: self.q2.value,
             self.q3.label: self.q3.value,
@@ -291,18 +286,21 @@ class TicketView(discord.ui.View):
                 "❌ Only the ticket creator can request a close.", ephemeral=True
             )
             return
-        staff_role = discord.utils.get(interaction.guild.roles, name=STAFF_ROLE)
-        mention = staff_role.mention if staff_role else "@Staff"
+        staff_role_name = get_guild_config(interaction.client.db, interaction.guild.id)["STAFF_ROLE"]
+        staff_role = discord.utils.get(interaction.guild.roles, name=staff_role_name)
+        mention = staff_role.mention if staff_role else f"@{staff_role_name}"
         await interaction.response.send_message(
             f"{mention}\n**{interaction.user.mention}** has requested to close this ticket."
         )
 
     @discord.ui.button(label="Close Ticket", style=discord.ButtonStyle.red, custom_id="close_v14")
     async def close_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
-        staff_role = discord.utils.get(interaction.guild.roles, name=STAFF_ROLE)
+        cfg = get_guild_config(interaction.client.db, interaction.guild.id)
+        staff_role = discord.utils.get(interaction.guild.roles, name=cfg["STAFF_ROLE"])
         if not staff_role or staff_role not in interaction.user.roles:
-            await interaction.response.send_message("❌ Staff only!", ephemeral=True)
-            return
+            if not interaction.user.guild_permissions.administrator:
+                await interaction.response.send_message("❌ Staff only!", ephemeral=True)
+                return
         await interaction.response.send_message("🔒 Closing ticket and generating transcript...", ephemeral=True)
         await _close_ticket(interaction.channel, interaction.user, interaction.client.db)
 
@@ -454,10 +452,13 @@ class TicketsBase(commands.Cog):
             await interaction.response.send_message("❌ This command can only be used in ticket channels.", ephemeral=True)
             return
 
-        has_perm = any(
-            (role := discord.utils.get(interaction.guild.roles, name=rn)) and role in interaction.user.roles
-            for rn in [STAFF_ROLE, *SELLER_ROLES]
-        )
+        has_perm = interaction.user.guild_permissions.administrator
+        if not has_perm:
+            close_roles = resolve_role_names(self.bot.db, interaction.guild.id, [STAFF_ROLE, *SELLER_ROLES])
+            has_perm = any(
+                (role := discord.utils.get(interaction.guild.roles, name=rn)) and role in interaction.user.roles
+                for rn in close_roles
+            )
         if not has_perm:
             has_perm = interaction.user.name.lower() == get_creator_name(ch)
 
