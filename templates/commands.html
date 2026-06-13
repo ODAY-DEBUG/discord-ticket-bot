@@ -414,6 +414,9 @@
                 opacity: 1;
             }
         }
+        .toast.info {
+            background: #3498db;
+        }
         
         /* Empty State */
         .empty-state {
@@ -524,7 +527,7 @@
         let commandsData = {};
         let currentEditingCommand = null;
         let tempSelectedRoles = [];
-        
+        const guildId = {{ guild_id }};
         // Command categories with emojis and default permission levels
         const categories = {
             "Moderation": { emoji: "🔨", order: 1, defaultLevel: "mod" },
@@ -736,7 +739,7 @@
             tempSelectedRoles = [];
         }
         
-        async function saveCommandPermissions() {
+                async function saveCommandPermissions() {
             if (!currentEditingCommand) return;
             
             // Update UI
@@ -755,82 +758,84 @@
                 permsDiv.innerHTML = tempSelectedRoles.map(role => `<span class="perm-tag">${role}</span>`).join('');
                 commandCard.setAttribute('data-customized', 'true');
                 // Add custom badge if not exists
-                if (!commandCard.querySelector('.command-badge:contains("CUSTOM")')) {
+                const existingCustom = Array.from(commandCard.querySelectorAll('.command-badge')).some(b => b.textContent === 'CUSTOM');
+                if (!existingCustom) {
                     const nameDiv = commandCard.querySelector('.command-name');
                     nameDiv.innerHTML += '<span class="command-badge" style="background:#2ecc71;">CUSTOM</span>';
                 }
             }
             
-            // Save to server via form submission
-            const form = document.createElement('form');
-            form.method = 'POST';
-            form.action = '';
-            
-            const hiddenType = document.createElement('input');
-            hiddenType.type = 'hidden';
-            hiddenType.name = 'form_type';
-            hiddenType.value = 'save_cmd_perms';
-            form.appendChild(hiddenType);
-            
-            const hasCmd = document.createElement('input');
-            hasCmd.type = 'hidden';
-            hasCmd.name = `has_cmd_${currentEditingCommand}`;
-            hasCmd.value = '1';
-            form.appendChild(hasCmd);
+            // Save via fetch API (async, no page reload)
+            const formData = new FormData();
+            formData.append('form_type', 'save_cmd_perms');
+            formData.append(`has_cmd_${currentEditingCommand}`, '1');
             
             for (const role of tempSelectedRoles) {
-                const input = document.createElement('input');
-                input.type = 'hidden';
-                input.name = `cmd_${currentEditingCommand}`;
-                input.value = role;
-                form.appendChild(input);
+                formData.append(`cmd_${currentEditingCommand}`, role);
             }
             
-            document.body.appendChild(form);
-            form.submit();
-            
-            closeRoleSelector();
-            showToast(`✅ Saved permissions for /${currentEditingCommand}`, 'success');
+            try {
+                const response = await fetch(`/dashboard/${guildId}/commands`, {
+                    method: 'POST',
+                    body: formData
+                });
+                
+                if (response.ok) {
+                    showToast(`✅ Saved permissions for /${currentEditingCommand}`, 'success');
+                    closeRoleSelector();
+                } else {
+                    showToast(`❌ Failed to save: ${response.status}`, 'error');
+                }
+            } catch (error) {
+                showToast(`❌ Error: ${error.message}`, 'error');
+            }
         }
         
         async function saveAllChanges() {
-            // Collect all changes from UI and submit a single form
-            const form = document.createElement('form');
-            form.method = 'POST';
-            form.action = '';
-            
-            const hiddenType = document.createElement('input');
-            hiddenType.type = 'hidden';
-            hiddenType.name = 'form_type';
-            hiddenType.value = 'save_cmd_perms';
-            form.appendChild(hiddenType);
+            // Collect all changes from UI
+            const formData = new FormData();
+            formData.append('form_type', 'save_cmd_perms');
             
             const commandCards = document.querySelectorAll('.command-card');
+            let changedCount = 0;
+            
             for (const card of commandCards) {
                 const commandName = card.getAttribute('data-command').replace(/-/g, ' ');
                 const permsDiv = card.querySelector('.current-perms');
                 const roleSpans = permsDiv.querySelectorAll('.perm-tag:not(.perm-tag-default)');
                 
                 if (roleSpans.length > 0) {
-                    const hasCmd = document.createElement('input');
-                    hasCmd.type = 'hidden';
-                    hasCmd.name = `has_cmd_${commandName}`;
-                    hasCmd.value = '1';
-                    form.appendChild(hasCmd);
-                    
+                    formData.append(`has_cmd_${commandName}`, '1');
                     for (const span of roleSpans) {
-                        const input = document.createElement('input');
-                        input.type = 'hidden';
-                        input.name = `cmd_${commandName}`;
-                        input.value = span.textContent;
-                        form.appendChild(input);
+                        formData.append(`cmd_${commandName}`, span.textContent);
                     }
+                    changedCount++;
                 }
             }
             
-            document.body.appendChild(form);
-            form.submit();
+            if (changedCount === 0) {
+                showToast('No changes to save', 'info');
+                return;
+            }
+            
             showToast('💾 Saving all changes...', 'success');
+            
+            try {
+                const response = await fetch(`/dashboard/${guildId}/commands`, {
+                    method: 'POST',
+                    body: formData
+                });
+                
+                if (response.ok) {
+                    showToast(`✅ Saved ${changedCount} command permission(s)!`, 'success');
+                    // Reload page to refresh stats
+                    setTimeout(() => window.location.reload(), 1000);
+                } else {
+                    showToast(`❌ Failed to save`, 'error');
+                }
+            } catch (error) {
+                showToast(`❌ Error: ${error.message}`, 'error');
+            }
         }
         
         function showToast(message, type = 'success') {

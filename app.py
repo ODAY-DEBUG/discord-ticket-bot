@@ -165,12 +165,39 @@ def view_transcript_raw(transcript_id):
     ] = f"attachment; filename=transcript-{transcript['channel_name']}.html"
     return response
 
-@app.route("/dashboard/<int:guild_id>/commands")
+@app.route("/dashboard/<int:guild_id>/commands", methods=["GET", "POST"])
 def commands_dashboard(guild_id):
     """Command permissions management page."""
     if "access_token" not in session:
         return redirect("/")
     
+    # Handle POST request (saving permissions)
+    if request.method == "POST":
+        form_type = request.form.get("form_type")
+        
+        if form_type == "save_cmd_perms":
+            # Clear existing permissions for this guild first (optional - or just update)
+            # Delete all existing command perms for this guild
+            # db["command_perms"].delete_many({"guild_id": guild_id})  # Uncomment to clear all first
+            
+            for key in request.form.keys():
+                if key.startswith("has_cmd_"):
+                    command_name = key[9:]  # Remove "has_cmd_" prefix
+                    roles = request.form.getlist(f"cmd_{command_name}")
+                    
+                    if roles:
+                        db["command_perms"].update_one(
+                            {"guild_id": guild_id, "command_name": command_name},
+                            {"$set": {"roles": roles}},
+                            upsert=True
+                        )
+                    else:
+                        db["command_perms"].delete_one({"guild_id": guild_id, "command_name": command_name})
+            
+            # Redirect back to the same page after save
+            return redirect(f"/dashboard/{guild_id}/commands?saved=true")
+    
+    # GET request - display the page
     if not BOT_TOKEN:
         return "<h1>Error: Discord bot token missing!</h1>", 500
     
@@ -191,8 +218,9 @@ def commands_dashboard(guild_id):
             break
     
     settings = {"command_perms": command_perms}
+    saved = request.args.get("saved") == "true"
     
-    return render_template("commands.html", guild_id=guild_id, guild_name=guild_name, roles=roles, settings=settings)
+    return render_template("commands.html", guild_id=guild_id, guild_name=guild_name, roles=roles, settings=settings, saved=saved)
 
 @app.route("/dashboard/<int:guild_id>", methods=["GET", "POST"])
 def guild_dashboard(guild_id):
