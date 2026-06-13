@@ -176,26 +176,41 @@ def commands_dashboard(guild_id):
         form_type = request.form.get("form_type")
         
         if form_type == "save_cmd_perms":
-            # Clear existing permissions for this guild first (optional - or just update)
-            # Delete all existing command perms for this guild
-            # db["command_perms"].delete_many({"guild_id": guild_id})  # Uncomment to clear all first
-            
-            for key in request.form.keys():
-                if key.startswith("has_cmd_"):
-                    command_name = key[9:]  # Remove "has_cmd_" prefix
-                    roles = request.form.getlist(f"cmd_{command_name}")
+            try:
+                # Process each command
+                for key in request.form.keys():
+                    if key.startswith("has_cmd_"):
+                        command_name = key[9:]  # Remove "has_cmd_" prefix
+                        roles = request.form.getlist(f"cmd_{command_name}")
+                        
+                        # Filter out empty strings
+                        roles = [r for r in roles if r and r.strip()]
+                        
+                        if roles:
+                            # Save to database
+                            db["command_perms"].update_one(
+                                {"guild_id": guild_id, "command_name": command_name},
+                                {"$set": {"roles": roles}},
+                                upsert=True
+                            )
+                            print(f"✅ Saved perms for {command_name}: {roles}")
+                        else:
+                            # Delete if no roles
+                            db["command_perms"].delete_one({"guild_id": guild_id, "command_name": command_name})
+                            print(f"🗑️ Deleted perms for {command_name}")
+                
+                # Return JSON for fetch requests
+                if request.headers.get('X-Requested-With') == 'XMLHttpRequest' or request.accept_mimetypes.best == 'application/json':
+                    return {"success": True, "message": "Permissions saved successfully"}
+                else:
+                    return redirect(f"/dashboard/{guild_id}/commands?saved=true")
                     
-                    if roles:
-                        db["command_perms"].update_one(
-                            {"guild_id": guild_id, "command_name": command_name},
-                            {"$set": {"roles": roles}},
-                            upsert=True
-                        )
-                    else:
-                        db["command_perms"].delete_one({"guild_id": guild_id, "command_name": command_name})
-            
-            # Redirect back to the same page after save
-            return redirect(f"/dashboard/{guild_id}/commands?saved=true")
+            except Exception as e:
+                print(f"❌ Error saving permissions: {e}")
+                if request.headers.get('X-Requested-With') == 'XMLHttpRequest' or request.accept_mimetypes.best == 'application/json':
+                    return {"success": False, "error": str(e)}
+                else:
+                    return redirect(f"/dashboard/{guild_id}/commands?error=true")
     
     # GET request - display the page
     if not BOT_TOKEN:
@@ -209,7 +224,9 @@ def commands_dashboard(guild_id):
     roles = [r for r in roles if r["name"] != "@everyone" and not r["managed"]]
     
     # Fetch saved command permissions
-    command_perms = {doc["command_name"]: doc["roles"] for doc in db["command_perms"].find({"guild_id": guild_id})}
+    command_perms = {}
+    for doc in db["command_perms"].find({"guild_id": guild_id}):
+        command_perms[doc["command_name"]] = doc["roles"]
     
     guild_name = "Unknown Server"
     for g in session.get("guilds", []):
@@ -219,9 +236,9 @@ def commands_dashboard(guild_id):
     
     settings = {"command_perms": command_perms}
     saved = request.args.get("saved") == "true"
+    error = request.args.get("error") == "true"
     
-    return render_template("commands.html", guild_id=guild_id, guild_name=guild_name, roles=roles, settings=settings, saved=saved)
-
+    return render_template("commands.html", guild_id=guild_id, guild_name=guild_name, roles=roles, settings=settings, saved=saved, error=error)
 @app.route("/dashboard/<int:guild_id>", methods=["GET", "POST"])
 def guild_dashboard(guild_id):
     if "access_token" not in session:

@@ -739,54 +739,80 @@
             tempSelectedRoles = [];
         }
         
-                async function saveCommandPermissions() {
+        async function saveCommandPermissions() {
             if (!currentEditingCommand) return;
             
-            // Update UI
-            const permsDiv = document.getElementById(`perms-${currentEditingCommand.replace(/ /g, '-')}`);
-            const commandCard = document.querySelector(`.command-card[data-command="${currentEditingCommand.replace(/ /g, '-')}"]`);
+            console.log(`Saving permissions for: ${currentEditingCommand}`);
+            console.log(`Selected roles:`, tempSelectedRoles);
             
-            if (tempSelectedRoles.length === 0) {
-                permsDiv.innerHTML = `<span class="perm-tag perm-tag-default">${getDefaultLevelLabel(getDefaultLevel(currentEditingCommand))}</span>`;
-                commandCard.setAttribute('data-customized', 'false');
-                // Remove custom badge
-                const badges = commandCard.querySelectorAll('.command-badge');
-                for (const badge of badges) {
-                    if (badge.textContent === 'CUSTOM') badge.remove();
-                }
-            } else {
-                permsDiv.innerHTML = tempSelectedRoles.map(role => `<span class="perm-tag">${role}</span>`).join('');
-                commandCard.setAttribute('data-customized', 'true');
-                // Add custom badge if not exists
-                const existingCustom = Array.from(commandCard.querySelectorAll('.command-badge')).some(b => b.textContent === 'CUSTOM');
-                if (!existingCustom) {
-                    const nameDiv = commandCard.querySelector('.command-name');
-                    nameDiv.innerHTML += '<span class="command-badge" style="background:#2ecc71;">CUSTOM</span>';
-                }
-            }
-            
-            // Save via fetch API (async, no page reload)
+            // Save via fetch API
             const formData = new FormData();
             formData.append('form_type', 'save_cmd_perms');
             formData.append(`has_cmd_${currentEditingCommand}`, '1');
             
-            for (const role of tempSelectedRoles) {
-                formData.append(`cmd_${currentEditingCommand}`, role);
+            if (tempSelectedRoles.length > 0) {
+                for (const role of tempSelectedRoles) {
+                    formData.append(`cmd_${currentEditingCommand}`, role);
+                }
+            } else {
+                // Send empty value to indicate no roles (will delete from DB)
+                formData.append(`cmd_${currentEditingCommand}`, '');
             }
             
             try {
                 const response = await fetch(`/dashboard/${guildId}/commands`, {
                     method: 'POST',
+                    headers: {
+                        'X-Requested-With': 'XMLHttpRequest'
+                    },
                     body: formData
                 });
                 
-                if (response.ok) {
+                const result = await response.json();
+                console.log('Response:', result);
+                
+                if (result.success) {
                     showToast(`✅ Saved permissions for /${currentEditingCommand}`, 'success');
+                    
+                    // Update UI after successful save
+                    const permsDiv = document.getElementById(`perms-${currentEditingCommand.replace(/ /g, '-')}`);
+                    const commandCard = document.querySelector(`.command-card[data-command="${currentEditingCommand.replace(/ /g, '-')}"]`);
+                    
+                    if (tempSelectedRoles.length === 0) {
+                        permsDiv.innerHTML = `<span class="perm-tag perm-tag-default">${getDefaultLevelLabel(getDefaultLevel(currentEditingCommand))}</span>`;
+                        commandCard.setAttribute('data-customized', 'false');
+                        // Remove custom badge
+                        const badges = commandCard.querySelectorAll('.command-badge');
+                        for (const badge of badges) {
+                            if (badge.textContent === 'CUSTOM') badge.remove();
+                        }
+                    } else {
+                        permsDiv.innerHTML = tempSelectedRoles.map(role => `<span class="perm-tag">${role}</span>`).join('');
+                        commandCard.setAttribute('data-customized', 'true');
+                        // Add custom badge if not exists
+                        let customExists = false;
+                        const badges = commandCard.querySelectorAll('.command-badge');
+                        for (const badge of badges) {
+                            if (badge.textContent === 'CUSTOM') customExists = true;
+                        }
+                        if (!customExists) {
+                            const nameDiv = commandCard.querySelector('.command-name');
+                            const badgeSpan = document.createElement('span');
+                            badgeSpan.className = 'command-badge';
+                            badgeSpan.style.background = '#2ecc71';
+                            badgeSpan.textContent = 'CUSTOM';
+                            nameDiv.appendChild(badgeSpan);
+                        }
+                    }
+                    
+                    // Update stats
+                    updateStats();
                     closeRoleSelector();
                 } else {
-                    showToast(`❌ Failed to save: ${response.status}`, 'error');
+                    showToast(`❌ Failed to save: ${result.error || 'Unknown error'}`, 'error');
                 }
             } catch (error) {
+                console.error('Error:', error);
                 showToast(`❌ Error: ${error.message}`, 'error');
             }
         }
@@ -804,38 +830,55 @@
                 const permsDiv = card.querySelector('.current-perms');
                 const roleSpans = permsDiv.querySelectorAll('.perm-tag:not(.perm-tag-default)');
                 
+                // Always include the command
+                formData.append(`has_cmd_${commandName}`, '1');
+                
                 if (roleSpans.length > 0) {
-                    formData.append(`has_cmd_${commandName}`, '1');
                     for (const span of roleSpans) {
                         formData.append(`cmd_${commandName}`, span.textContent);
                     }
                     changedCount++;
+                } else {
+                    // Send empty to delete from DB
+                    formData.append(`cmd_${commandName}`, '');
                 }
             }
             
-            if (changedCount === 0) {
-                showToast('No changes to save', 'info');
-                return;
-            }
-            
-            showToast('💾 Saving all changes...', 'success');
+            showToast('💾 Saving all changes...', 'info');
             
             try {
                 const response = await fetch(`/dashboard/${guildId}/commands`, {
                     method: 'POST',
+                    headers: {
+                        'X-Requested-With': 'XMLHttpRequest'
+                    },
                     body: formData
                 });
                 
-                if (response.ok) {
+                const result = await response.json();
+                
+                if (result.success) {
                     showToast(`✅ Saved ${changedCount} command permission(s)!`, 'success');
-                    // Reload page to refresh stats
+                    updateStats();
+                    // Reload page to refresh everything
                     setTimeout(() => window.location.reload(), 1000);
                 } else {
-                    showToast(`❌ Failed to save`, 'error');
+                    showToast(`❌ Failed to save: ${result.error}`, 'error');
                 }
             } catch (error) {
                 showToast(`❌ Error: ${error.message}`, 'error');
             }
+        }
+        
+        function updateStats() {
+            const commandCards = document.querySelectorAll('.command-card');
+            let customizedCount = 0;
+            for (const card of commandCards) {
+                if (card.getAttribute('data-customized') === 'true') {
+                    customizedCount++;
+                }
+            }
+            document.getElementById('customizedCommands').textContent = customizedCount;
         }
         
         function showToast(message, type = 'success') {
