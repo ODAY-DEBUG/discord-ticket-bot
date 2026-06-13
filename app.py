@@ -1,5 +1,5 @@
 import os
-from flask import Flask, render_template, redirect, request, session, Response
+from flask import Flask, render_template, redirect, request, session, Response, jsonify
 import requests
 from dotenv import load_dotenv
 from db import get_bot_token, get_db
@@ -52,7 +52,6 @@ def callback():
         "scope": "identify guilds",
     }
 
-    # User-Agent fix to prevent Discord API blocks on cloud hosts
     headers = {
         "Content-Type": "application/x-www-form-urlencoded",
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) DashboardBot/1.0",
@@ -99,7 +98,6 @@ def transcripts():
 
     guilds = session.get("guilds", [])
 
-    # Get transcripts for guilds the user manages
     transcripts_by_guild = {}
     for guild in guilds:
         guild_id = int(guild["id"])
@@ -126,14 +124,12 @@ def view_transcript(transcript_id):
     if not transcript:
         abort(404)
 
-    # Check if user has permission to view this transcript
     guilds = session.get("guilds", [])
     user_guild_ids = [int(g["id"]) for g in guilds]
 
     if transcript["guild_id"] not in user_guild_ids:
         abort(403)
 
-    # Return the HTML content directly
     return transcript["html_content"]
 
 
@@ -152,7 +148,6 @@ def view_transcript_raw(transcript_id):
     if not transcript:
         abort(404)
 
-    # Check permission
     guilds = session.get("guilds", [])
     user_guild_ids = [int(g["id"]) for g in guilds]
 
@@ -160,85 +155,10 @@ def view_transcript_raw(transcript_id):
         abort(403)
 
     response = Response(transcript["html_content"], mimetype="text/html")
-    response.headers[
-        "Content-Disposition"
-    ] = f"attachment; filename=transcript-{transcript['channel_name']}.html"
+    response.headers["Content-Disposition"] = f"attachment; filename=transcript-{transcript['channel_name']}.html"
     return response
 
-@app.route("/dashboard/<int:guild_id>/commands", methods=["GET", "POST"])
-def commands_dashboard(guild_id):
-    """Command permissions management page."""
-    if "access_token" not in session:
-        return redirect("/")
-    
-    # Handle POST request (saving permissions)
-    if request.method == "POST":
-        form_type = request.form.get("form_type")
-        
-        if form_type == "save_cmd_perms":
-            try:
-                # Process each command
-                for key in request.form.keys():
-                    if key.startswith("has_cmd_"):
-                        command_name = key[9:]  # Remove "has_cmd_" prefix
-                        roles = request.form.getlist(f"cmd_{command_name}")
-                        
-                        # Filter out empty strings
-                        roles = [r for r in roles if r and r.strip()]
-                        
-                        if roles:
-                            # Save to database
-                            db["command_perms"].update_one(
-                                {"guild_id": guild_id, "command_name": command_name},
-                                {"$set": {"roles": roles}},
-                                upsert=True
-                            )
-                            print(f"✅ Saved perms for {command_name}: {roles}")
-                        else:
-                            # Delete if no roles
-                            db["command_perms"].delete_one({"guild_id": guild_id, "command_name": command_name})
-                            print(f"🗑️ Deleted perms for {command_name}")
-                
-                # Return JSON for fetch requests
-                if request.headers.get('X-Requested-With') == 'XMLHttpRequest' or request.accept_mimetypes.best == 'application/json':
-                    return {"success": True, "message": "Permissions saved successfully"}
-                else:
-                    return redirect(f"/dashboard/{guild_id}/commands?saved=true")
-                    
-            except Exception as e:
-                print(f"❌ Error saving permissions: {e}")
-                if request.headers.get('X-Requested-With') == 'XMLHttpRequest' or request.accept_mimetypes.best == 'application/json':
-                    return {"success": False, "error": str(e)}
-                else:
-                    return redirect(f"/dashboard/{guild_id}/commands?error=true")
-    
-    # GET request - display the page
-    if not BOT_TOKEN:
-        return "<h1>Error: Discord bot token missing!</h1>", 500
-    
-    bot_headers = {"Authorization": f"Bot {BOT_TOKEN}", "User-Agent": "DashboardBot/1.0"}
-    
-    # Fetch Roles
-    roles_res = requests.get(f"https://discord.com/api/v10/guilds/{guild_id}/roles", headers=bot_headers)
-    roles = roles_res.json() if roles_res.status_code == 200 else []
-    roles = [r for r in roles if r["name"] != "@everyone" and not r["managed"]]
-    
-    # Fetch saved command permissions
-    command_perms = {}
-    for doc in db["command_perms"].find({"guild_id": guild_id}):
-        command_perms[doc["command_name"]] = doc["roles"]
-    
-    guild_name = "Unknown Server"
-    for g in session.get("guilds", []):
-        if int(g["id"]) == guild_id:
-            guild_name = g["name"]
-            break
-    
-    settings = {"command_perms": command_perms}
-    saved = request.args.get("saved") == "true"
-    error = request.args.get("error") == "true"
-    
-    return render_template("commands.html", guild_id=guild_id, guild_name=guild_name, roles=roles, settings=settings, saved=saved, error=error)
+
 @app.route("/dashboard/<int:guild_id>", methods=["GET", "POST"])
 def guild_dashboard(guild_id):
     if "access_token" not in session:
@@ -416,7 +336,9 @@ def guild_dashboard(guild_id):
             app_id = request.form.get("delete_app_id")
             if app_id:
                 db["applications_config"].delete_one({"guild_id": guild_id, "app_id": app_id})
+        
         elif form_type == "save_cmd_perms":
+            # Process command permissions from settings.html (old way)
             for key in request.form.keys():
                 if key.startswith("has_cmd_"):
                     command_name = key[9:]
@@ -429,6 +351,8 @@ def guild_dashboard(guild_id):
                         )
                     else:
                         db["command_perms"].delete_one({"guild_id": guild_id, "command_name": command_name})
+            
+            return redirect(f"/dashboard/{guild_id}#commands")
 
     # GET Request: Fetch Data for Display
     if not BOT_TOKEN:
@@ -443,16 +367,12 @@ def guild_dashboard(guild_id):
     roles = roles_res.json() if roles_res.status_code == 200 else []
     roles = [r for r in roles if r["name"] != "@everyone" and not r["managed"]]
 
-    print(f"🔍 DEBUG: Fetched {len(roles)} roles for guild {guild_id}")
-
     # Fetch Channels
     chans_res = requests.get(f"https://discord.com/api/v10/guilds/{guild_id}/channels", headers=bot_headers)
     if chans_res.status_code != 200:
         print(f"❌ CHANNELS FETCH FAILED: {chans_res.status_code} - {chans_res.text}")
     channels = chans_res.json() if chans_res.status_code == 200 else []
     text_channels = [c for c in channels if c["type"] == 0]
-
-    print(f"🔍 DEBUG: Fetched {len(text_channels)} channels for guild {guild_id}")
 
     # Fetch Settings
     settings = {
@@ -484,6 +404,82 @@ def guild_dashboard(guild_id):
     return render_template(
         "settings.html", guild_id=guild_id, guild_name=guild_name, roles=roles, channels=text_channels, settings=settings
     )
+
+
+@app.route("/dashboard/<int:guild_id>/commands", methods=["GET", "POST"])
+def commands_dashboard(guild_id):
+    """Command permissions management page."""
+    if "access_token" not in session:
+        return redirect("/")
+    
+    # Handle POST request (saving permissions)
+    if request.method == "POST":
+        form_type = request.form.get("form_type")
+        
+        if form_type == "save_cmd_perms":
+            print(f"📝 Saving command permissions for guild {guild_id}")
+            print(f"📝 Form data: {dict(request.form)}")
+            
+            try:
+                # Process each command
+                for key in request.form.keys():
+                    if key.startswith("has_cmd_"):
+                        command_name = key[9:]  # Remove "has_cmd_" prefix
+                        roles = request.form.getlist(f"cmd_{command_name}")
+                        
+                        # Filter out empty strings
+                        roles = [r for r in roles if r and r.strip()]
+                        
+                        if roles:
+                            # Save to database
+                            db["command_perms"].update_one(
+                                {"guild_id": guild_id, "command_name": command_name},
+                                {"$set": {"roles": roles}},
+                                upsert=True
+                            )
+                            print(f"✅ Saved perms for {command_name}: {roles}")
+                        else:
+                            # Delete if no roles
+                            result = db["command_perms"].delete_one({"guild_id": guild_id, "command_name": command_name})
+                            if result.deleted_count > 0:
+                                print(f"🗑️ Deleted perms for {command_name}")
+                            else:
+                                print(f"ℹ️ No existing perms for {command_name} to delete")
+                
+                # Return JSON response for AJAX requests
+                return jsonify({"success": True, "message": "Permissions saved successfully"})
+                
+            except Exception as e:
+                print(f"❌ Error saving permissions: {e}")
+                return jsonify({"success": False, "error": str(e)})
+    
+    # GET request - display the page
+    if not BOT_TOKEN:
+        return "<h1>Error: Discord bot token missing!</h1>", 500
+    
+    bot_headers = {"Authorization": f"Bot {BOT_TOKEN}", "User-Agent": "DashboardBot/1.0"}
+    
+    # Fetch Roles
+    roles_res = requests.get(f"https://discord.com/api/v10/guilds/{guild_id}/roles", headers=bot_headers)
+    roles = roles_res.json() if roles_res.status_code == 200 else []
+    roles = [r for r in roles if r["name"] != "@everyone" and not r["managed"]]
+    
+    # Fetch saved command permissions
+    command_perms = {}
+    for doc in db["command_perms"].find({"guild_id": guild_id}):
+        command_perms[doc["command_name"]] = doc["roles"]
+    
+    print(f"📋 Loaded command perms for guild {guild_id}: {command_perms}")
+    
+    guild_name = "Unknown Server"
+    for g in session.get("guilds", []):
+        if int(g["id"]) == guild_id:
+            guild_name = g["name"]
+            break
+    
+    settings = {"command_perms": command_perms}
+    
+    return render_template("commands.html", guild_id=guild_id, guild_name=guild_name, roles=roles, settings=settings)
 
 
 if __name__ == "__main__":
