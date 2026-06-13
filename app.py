@@ -2,12 +2,17 @@ import os
 from flask import Flask, render_template, redirect, request, session, Response, jsonify
 import requests
 from dotenv import load_dotenv
-from db import get_bot_token, get_db
+from db import get_bot_token, get_db, test_mongodb
 from bson.objectid import ObjectId
 from flask import abort
 from datetime import datetime
+import logging
 
 load_dotenv()
+
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
 app.secret_key = os.getenv("FLASK_SECRET", "make_up_a_random_string_here")
@@ -24,6 +29,16 @@ BOT_TOKEN = get_bot_token()
 
 # Connect to MongoDB (shared singleton with the bot)
 db = get_db()
+
+# Test MongoDB connection on startup
+if db is not None:
+    logger.info("🔍 Testing MongoDB connection...")
+    if test_mongodb():
+        logger.info("✅ MongoDB test passed!")
+    else:
+        logger.error("❌ MongoDB test failed!")
+else:
+    logger.error("❌ Could not connect to MongoDB at startup!")
 
 
 @app.route("/")
@@ -102,7 +117,7 @@ def transcripts():
     transcripts_by_guild = {}
     for guild in guilds:
         guild_id = int(guild["id"])
-        guild_transcripts = list(db["transcripts"].find({"guild_id": guild_id}).sort("closed_at", -1).limit(50))
+        guild_transcripts = list(db["transcripts"].find({"guild_id": guild_id}).sort("closed_at", -1).limit(50)) if db else []
 
         if guild_transcripts:
             transcripts_by_guild[guild["name"]] = {"id": guild_id, "transcripts": guild_transcripts}
@@ -115,6 +130,9 @@ def view_transcript(transcript_id):
     """View a specific HTML transcript."""
     if "access_token" not in session:
         return redirect("/")
+
+    if not db:
+        abort(500, "Database connection not available")
 
     try:
         obj_id = ObjectId(transcript_id)
@@ -140,6 +158,9 @@ def view_transcript_raw(transcript_id):
     if "access_token" not in session:
         return redirect("/")
 
+    if not db:
+        abort(500, "Database connection not available")
+
     try:
         obj_id = ObjectId(transcript_id)
     except:
@@ -164,6 +185,9 @@ def view_transcript_raw(transcript_id):
 def guild_dashboard(guild_id):
     if "access_token" not in session:
         return redirect("/")
+    
+    if not db:
+        return "<h1>Error: Database connection not available!</h1>", 500
 
     # Handle Saving Settings
     if request.method == "POST":
@@ -349,14 +373,14 @@ def guild_dashboard(guild_id):
     # Fetch Roles
     roles_res = requests.get(f"https://discord.com/api/v10/guilds/{guild_id}/roles", headers=bot_headers)
     if roles_res.status_code != 200:
-        print(f"❌ ROLES FETCH FAILED: {roles_res.status_code} - {roles_res.text}")
+        logger.error(f"❌ ROLES FETCH FAILED: {roles_res.status_code} - {roles_res.text}")
     roles = roles_res.json() if roles_res.status_code == 200 else []
     roles = [r for r in roles if r["name"] != "@everyone" and not r["managed"]]
 
     # Fetch Channels
     chans_res = requests.get(f"https://discord.com/api/v10/guilds/{guild_id}/channels", headers=bot_headers)
     if chans_res.status_code != 200:
-        print(f"❌ CHANNELS FETCH FAILED: {chans_res.status_code} - {chans_res.text}")
+        logger.error(f"❌ CHANNELS FETCH FAILED: {chans_res.status_code} - {chans_res.text}")
     channels = chans_res.json() if chans_res.status_code == 200 else []
     text_channels = [c for c in channels if c["type"] == 0]
 
@@ -398,15 +422,22 @@ def commands_dashboard(guild_id):
     if "access_token" not in session:
         return redirect("/")
     
+    if not db:
+        logger.error("❌ Database connection not available!")
+        if request.method == "POST":
+            return jsonify({"success": False, "error": "Database connection not available"}), 500
+        return "<h1>Error: Database connection not available!</h1>", 500
+    
     # Handle POST request (saving permissions)
     if request.method == "POST":
         form_type = request.form.get("form_type")
         
         if form_type == "save_cmd_perms":
-            print("=" * 60)
-            print(f"📝 SAVING COMMAND PERMISSIONS for guild {guild_id}")
-            print(f"📝 Form data keys: {list(request.form.keys())}")
-            print("=" * 60)
+            logger.info("=" * 60)
+            logger.info(f"📝 SAVING COMMAND PERMISSIONS for guild {guild_id}")
+            logger.info(f"📝 All form keys: {list(request.form.keys())}")
+            logger.info(f"📝 Form data: {dict(request.form)}")
+            logger.info("=" * 60)
             
             try:
                 saved_commands = []
@@ -415,47 +446,86 @@ def commands_dashboard(guild_id):
                 for key in request.form.keys():
                     if key.startswith("has_cmd_"):
                         command_name = key[8:]  # Remove "has_cmd_" prefix
-                        print(f"\n📌 Processing command: '{command_name}'")
+                        logger.info(f"\n📌 Processing command: '{command_name}'")
                         
                         # Get the roles for this command
-                        roles = request.form.getlist(f"cmd_{command_name}")
-                        # Clean and validate roles
-                        roles = [r.strip() for r in roles if r and r.strip()]
+                        raw_roles = request.form.getlist(f"cmd_{command_name}")
+                        # Clean and validate roles - filter out empty strings
+                        roles = [r.strip() for r in raw_roles if r and r.strip()]
                         
-                        print(f"   Raw roles: {request.form.getlist(f'cmd_{command_name}')}")
-                        print(f"   Cleaned roles: {roles}")
+                        logger.info(f"   Raw roles from form: {raw_roles}")
+                        logger.info(f"   Cleaned roles: {roles}")
+                        logger.info(f"   Command name repr: {repr(command_name)}")
+                        logger.info(f"   Guild ID: {guild_id}")
                         
                         if roles:
                             # Update or insert the permissions
-                            result = db["command_perms"].update_one(
-                                {"guild_id": guild_id, "command_name": command_name},
-                                {"$set": {"roles": roles}},
-                                upsert=True
-                            )
-                            saved_commands.append(command_name)
-                            print(f"   ✅ Saved {len(roles)} role(s) for /{command_name}")
-                            print(f"   MongoDB result: matched={result.matched_count}, modified={result.modified_count}, upserted_id={result.upserted_id}")
-                            
-                            # Verify the save
-                            verify = db["command_perms"].find_one({"guild_id": guild_id, "command_name": command_name})
-                            print(f"   🔍 Verification after save: {verify}")
+                            try:
+                                result = db["command_perms"].update_one(
+                                    {"guild_id": guild_id, "command_name": command_name},
+                                    {"$set": {
+                                        "guild_id": guild_id,
+                                        "command_name": command_name,
+                                        "roles": roles
+                                    }},
+                                    upsert=True
+                                )
+                                saved_commands.append(command_name)
+                                logger.info(f"   ✅ MongoDB update result:")
+                                logger.info(f"      - Matched: {result.matched_count}")
+                                logger.info(f"      - Modified: {result.modified_count}")
+                                logger.info(f"      - Upserted ID: {result.upserted_id}")
+                                
+                                # Verify the save immediately
+                                verify = db["command_perms"].find_one({
+                                    "guild_id": guild_id, 
+                                    "command_name": command_name
+                                })
+                                logger.info(f"   🔍 Verification: {verify}")
+                                
+                                if verify is None:
+                                    logger.error(f"   ❌ SAVE FAILED - Document not found after save!")
+                                elif verify.get("roles") != roles:
+                                    logger.error(f"   ❌ SAVE MISMATCH - Expected {roles}, got {verify.get('roles')}")
+                                else:
+                                    logger.info(f"   ✅ Save verified successfully")
+                                    
+                            except Exception as db_error:
+                                logger.error(f"   ❌ MongoDB error: {db_error}")
+                                raise
                         else:
                             # No roles selected, delete existing permissions
-                            result = db["command_perms"].delete_one({"guild_id": guild_id, "command_name": command_name})
-                            if result.deleted_count > 0:
-                                print(f"   🗑️ Deleted permissions for /{command_name}")
-                                saved_commands.append(command_name)
-                            else:
-                                print(f"   ℹ️ No existing permissions for /{command_name}")
+                            try:
+                                result = db["command_perms"].delete_one({
+                                    "guild_id": guild_id, 
+                                    "command_name": command_name
+                                })
+                                logger.info(f"   🗑️ Delete result: deleted={result.deleted_count}")
+                                
+                                # Verify deletion
+                                verify = db["command_perms"].find_one({
+                                    "guild_id": guild_id, 
+                                    "command_name": command_name
+                                })
+                                if verify is None:
+                                    logger.info(f"   ✅ Deletion verified")
+                                    saved_commands.append(command_name)
+                                else:
+                                    logger.error(f"   ❌ Deletion failed - document still exists!")
+                                    
+                            except Exception as db_error:
+                                logger.error(f"   ❌ MongoDB delete error: {db_error}")
+                                raise
                 
                 # Final verification - show all saved permissions for this guild
                 all_saved = list(db["command_perms"].find({"guild_id": guild_id}))
-                print(f"\n📋 FINAL DATABASE STATE for guild {guild_id}:")
+                logger.info(f"\n📋 FINAL DATABASE STATE for guild {guild_id}:")
                 for doc in all_saved:
-                    print(f"   /{doc['command_name']}: {doc['roles']}")
+                    logger.info(f"   /{doc['command_name']}: {doc['roles']}")
+                logger.info(f"   Total documents: {len(all_saved)}")
                 
-                print(f"\n✅ Processed {len(saved_commands)} commands")
-                print("=" * 60)
+                logger.info(f"\n✅ Successfully processed {len(saved_commands)} commands")
+                logger.info("=" * 60)
                 
                 return jsonify({
                     "success": True, 
@@ -464,7 +534,7 @@ def commands_dashboard(guild_id):
                 })
                 
             except Exception as e:
-                print(f"❌ Error saving permissions: {e}")
+                logger.error(f"❌ Error saving permissions: {e}")
                 import traceback
                 traceback.print_exc()
                 return jsonify({"success": False, "error": str(e)}), 500
@@ -488,29 +558,29 @@ def commands_dashboard(guild_id):
                 for r in roles_res.json()
                 if r["name"] != "@everyone" and not r["managed"]
             ]
-            print(f"✅ Fetched {len(roles)} roles for guild {guild_id}")
+            logger.info(f"✅ Fetched {len(roles)} roles for guild {guild_id}")
         else:
-            print(f"❌ Failed to fetch roles: {roles_res.status_code}")
+            logger.error(f"❌ Failed to fetch roles: {roles_res.status_code}")
             roles = []
     except Exception as e:
-        print(f"❌ Error fetching roles: {e}")
+        logger.error(f"❌ Error fetching roles: {e}")
         roles = []
     
     # Fetch saved command permissions from MongoDB
     command_perms = {}
     try:
         all_docs = list(db["command_perms"].find({"guild_id": guild_id}))
-        print(f"\n📋 DATABASE CHECK for guild {guild_id}:")
-        print(f"   Total documents found: {len(all_docs)}")
+        logger.info(f"\n📋 DATABASE CHECK for guild {guild_id}:")
+        logger.info(f"   Total documents found: {len(all_docs)}")
         
         for doc in all_docs:
             command_perms[doc["command_name"]] = doc["roles"]
-            print(f"   /{doc['command_name']}: {doc['roles']}")
+            logger.info(f"   /{doc['command_name']}: {doc['roles']}")
         
         if len(all_docs) == 0:
-            print("   No permissions found in database for this guild")
+            logger.info("   No permissions found in database for this guild")
     except Exception as e:
-        print(f"❌ Error fetching from database: {e}")
+        logger.error(f"❌ Error fetching from database: {e}")
     
     guild_name = "Unknown Server"
     for g in session.get("guilds", []):
@@ -529,5 +599,6 @@ def commands_dashboard(guild_id):
         timestamp=datetime.now().timestamp()
     )
 
+
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=int(os.getenv("PORT", 5000)))
+    app.run(host="0.0.0.0", port=int(os.getenv("PORT", 5000)), debug=True)
