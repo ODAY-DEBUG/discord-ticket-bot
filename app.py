@@ -198,7 +198,7 @@ def guild_dashboard(guild_id):
 
         elif form_type == "logging":
             channel_id = request.form.get("log_channel_id")
-            transcript_channel_id = request.form.get("TRANSCRIPT_CHANNEL_ID")  # FIX: Get transcript channel
+            transcript_channel_id = request.form.get("TRANSCRIPT_CHANNEL_ID")
 
             if channel_id and channel_id != "none":
                 db["log_settings"].update_one(
@@ -207,7 +207,6 @@ def guild_dashboard(guild_id):
             elif channel_id == "none":
                 db["log_settings"].delete_one({"guild_id": guild_id})
 
-            # FIX: Save transcript channel to bot_config
             db["bot_config"].update_one(
                 {"guild_id": guild_id},
                 {

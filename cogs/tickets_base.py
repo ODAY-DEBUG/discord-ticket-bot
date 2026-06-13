@@ -1,3 +1,4 @@
+import os
 import discord
 from discord.ext import commands
 from discord import app_commands
@@ -514,47 +515,80 @@ async def _close_ticket(channel: discord.TextChannel, closed_by: discord.Member,
     except Exception as e:
         print(f"❌ Failed to save transcript to MongoDB: {e}")
     
-    # 5. Send to Transcript Channel (as both file and link)
+    # 5. Send to Transcript Channel - ONLY embed with link, NO file
     try:
         cfg = get_guild_config(db, guild.id)
         transcript_channel_id = cfg.get("TRANSCRIPT_CHANNEL_ID")
         
-        # Get dashboard URL from environment or use default
+        # Get dashboard URL from environment
         dashboard_url = os.getenv("DASHBOARD_URL", "https://your-domain.com")
         
         if transcript_channel_id:
             t_channel = guild.get_channel(transcript_channel_id)
             if t_channel:
-                # Create Discord file from HTML
-                html_file = discord.File(fp=io.BytesIO(html_bytes), filename=f"transcript-{channel.name}.html")
-                
-                # Create embed with transcript info
+                # Create a nice embed that STAFF can use - NO file for regular channels
                 t_embed = discord.Embed(
-                    title=f"📑 Transcript: {channel.name}",
+                    title=f"📑 Ticket Closed: {channel.name}",
                     description=f"**Category:** {transcript_doc['category']}\n**Creator:** {transcript_doc['creator_name']}\n**Closed By:** {closed_by.mention}\n**Messages:** {len(messages)}",
                     color=0x5865F2,
                     timestamp=datetime.now(timezone.utc)
                 )
-                t_embed.add_field(name="View Online", value=f"[Click Here]({dashboard_url}/transcripts/{transcript_doc['_id']})", inline=False)
+                t_embed.add_field(
+                    name="View Full Transcript", 
+                    value=f"[Click Here to View Online]({dashboard_url}/transcripts/{transcript_doc['_id']})\n\n*Staff can also download the HTML file from the dashboard*", 
+                    inline=False
+                )
+                t_embed.set_footer(text=f"Transcript ID: {transcript_doc['_id']}")
                 
-                await t_channel.send(embed=t_embed, file=html_file)
+                # Send just the embed - NO HTML file to public channels
+                await t_channel.send(embed=t_embed)
+                print(f"✅ Transcript link sent to {t_channel.name}")
     except Exception as e:
         print(f"Error sending transcript to channel: {e}")
     
-    # 6. Send to Ticket Creator DM (as file only)
+    # 6. Send to Ticket Creator DM - readable summary, NOT an HTML file
     try:
         creator_member = guild.get_member_named(creator_name) or discord.utils.get(guild.members, name=creator_name)
         if creator_member:
             try:
+                # Create a summary embed for the user
                 dm_embed = discord.Embed(
                     title=f"📑 Ticket Closed: {channel.name}",
-                    description=f"Your ticket in **{guild.name}** was closed by {closed_by.mention}.\n\n**Message count:** {len(messages)} messages",
-                    color=0x5865F2
+                    description=f"Your ticket in **{guild.name}** has been closed by {closed_by.mention}.",
+                    color=0x5865F2,
+                    timestamp=datetime.now(timezone.utc)
                 )
-                dm_file = discord.File(fp=io.BytesIO(html_bytes), filename=f"transcript-{channel.name}.html")
-                await creator_member.send(embed=dm_embed, file=dm_file)
-            except discord.HTTPException:
-                pass  # DMs closed
+                
+                # Add message preview (last 5 messages)
+                if messages:
+                    last_messages = messages[-5:]
+                    preview = ""
+                    for msg in last_messages:
+                        author_name = msg.get("author", "Unknown")[:20]
+                        content_preview = msg.get("content", "")[:50]
+                        if content_preview:
+                            preview += f"**{author_name}:** {content_preview}\n"
+                    
+                    if preview:
+                        dm_embed.add_field(name="Last Messages", value=preview[:500], inline=False)
+                
+                dm_embed.add_field(name="Total Messages", value=str(len(messages)), inline=True)
+                dm_embed.add_field(name="Category", value=transcript_doc['category'], inline=True)
+                
+                # Add link to view transcript online
+                dashboard_url = os.getenv("DASHBOARD_URL", "https://your-domain.com")
+                dm_embed.add_field(
+                    name="View Full Transcript", 
+                    value=f"You can view the complete conversation here:\n{dashboard_url}/transcripts/{transcript_doc['_id']}",
+                    inline=False
+                )
+                
+                await creator_member.send(embed=dm_embed)
+                print(f"✅ Transcript summary sent to {creator_member.name}")
+            except discord.Forbidden:
+                print(f"Cannot DM {creator_name} - DMs disabled")
+            except Exception as e:
+                print(f"Error sending DM: {e}")
     except Exception as e:
         print(f"Error sending transcript to DM: {e}")
     
