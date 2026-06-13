@@ -611,28 +611,31 @@
         const guildId = {{ guild_id }};
         const roles = {{ roles | tojson }};
         let savedPerms = {{ settings.command_perms | tojson }};
-        
+
         console.log("Guild ID:", guildId);
         console.log("Roles:", roles);
         console.log("Saved permissions:", savedPerms);
-        
+        console.log("Saved permissions type:", typeof savedPerms);
+        console.log("Saved permissions keys:", Object.keys(savedPerms));
+
         // Update debug info
-        document.getElementById('debugInfo').textContent = 
+        document.getElementById('debugInfo').textContent =
             `Guild ID: ${guildId}\n` +
             `Roles (${roles.length}): ${roles.map(r => r.name).join(', ')}\n` +
-            `Saved Permissions: ${JSON.stringify(savedPerms, null, 2)}`;
-        
+            `Saved Permissions:\n${JSON.stringify(savedPerms, null, 2)}\n` +
+            `Number of saved commands: ${Object.keys(savedPerms).length}`;
+
         // State
         let currentEditingCommand = null;
         let tempSelectedRoles = [];
-        
+
         // All commands organized by category
         const categories = {
             "Moderation": {
                 emoji: "🔨",
                 defaultLevel: "mod",
                 commands: [
-                    "mute", "unmute", "kick", "ban", "unban", "warn", "warnings", 
+                    "mute", "unmute", "kick", "ban", "unban", "warn", "warnings",
                     "clearwarnings", "purge", "lock", "unlock", "rename", "add", "remove",
                     "slowmode", "voicekick", "vcmute", "vcunmute", "nickname", "moveall",
                     "hide", "reveal", "softban"
@@ -667,7 +670,7 @@
                 emoji: "🛡️",
                 defaultLevel: "admin",
                 commands: [
-                    "automod links", "automod invites", "automod addword", 
+                    "automod links", "automod invites", "automod addword",
                     "automod removeword", "automod listwords", "automod addchannel",
                     "automod removechannel", "automod listchannels"
                 ]
@@ -691,13 +694,13 @@
                 emoji: "👑",
                 defaultLevel: "staff",
                 commands: [
-                    "whois", "serverinfo", "roleinfo", "channelinfo", "avatar", 
+                    "whois", "serverinfo", "roleinfo", "channelinfo", "avatar",
                     "servericon", "userwarnings", "audit", "rolemembers", "cleanup",
                     "clonechannel", "addrole", "removerole", "emojisteal", "multiban", "multimute"
                 ]
             }
         };
-        
+
         function getCommandDefaultLevel(commandName) {
             for (const [cat, data] of Object.entries(categories)) {
                 if (data.commands.includes(commandName)) {
@@ -706,45 +709,59 @@
             }
             return "mod";
         }
-        
+
         function getDefaultLevelLabel(level) {
-            switch(level) {
+            switch (level) {
                 case 'admin': return '👑 Admin Only';
                 case 'mod': return '🛡️ Mod+ Only';
                 case 'staff': return '⭐ Staff Only';
                 default: return 'Default';
             }
         }
-        
+
         function escapeHtml(text) {
             const div = document.createElement('div');
             div.textContent = text;
             return div.innerHTML;
         }
-        
+
+        // CRITICAL FIX: Use the exact command name for lookups
+        function getSavedRoles(commandName) {
+            // Try exact match first
+            if (savedPerms[commandName]) {
+                console.log(`Found exact match for "${commandName}":`, savedPerms[commandName]);
+                return savedPerms[commandName];
+            }
+
+            // If not found, log all available keys for debugging
+            console.warn(`No saved permissions found for "${commandName}"`);
+            console.log("Available keys:", Object.keys(savedPerms));
+            return [];
+        }
+
         function renderCommands() {
             const container = document.getElementById('commandsContainer');
             if (!container) return;
-            
+
             let totalCommands = 0;
             let customizedCount = 0;
             let html = '';
-            
+
             const sortedCategories = Object.keys(categories).sort((a, b) => {
-                const order = { 
-                    "Moderation": 1, "Giveaways": 2, "Sticky": 3, "Tickets": 4, 
-                    "Reaction Roles": 5, "Welcome": 6, "AutoMod": 7, "Logging": 8, 
-                    "Autorole": 9, "Applications": 10, "Staff Utils": 11 
+                const order = {
+                    "Moderation": 1, "Giveaways": 2, "Sticky": 3, "Tickets": 4,
+                    "Reaction Roles": 5, "Welcome": 6, "AutoMod": 7, "Logging": 8,
+                    "Autorole": 9, "Applications": 10, "Staff Utils": 11
                 };
                 return (order[a] || 99) - (order[b] || 99);
             });
-            
+
             for (const category of sortedCategories) {
                 const commands = categories[category].commands;
                 if (!commands || commands.length === 0) continue;
-                
+
                 totalCommands += commands.length;
-                
+
                 html += `<div class="category-section" data-category="${category}">
                     <div class="category-header" onclick="toggleCategory(this)">
                         <div class="category-title">
@@ -755,20 +772,23 @@
                         <div class="toggle-icon">▼</div>
                     </div>
                     <div class="category-content">`;
-                
+
                 for (const cmd of commands) {
-                    const selectedRoles = savedPerms[cmd] || [];
+                    // CRITICAL: Use getSavedRoles to properly look up permissions
+                    const selectedRoles = getSavedRoles(cmd);
                     const isCustomized = selectedRoles.length > 0;
                     if (isCustomized) customizedCount++;
-                    
+
                     const defaultLevel = getCommandDefaultLevel(cmd);
                     const displayRoles = isCustomized ? selectedRoles : [getDefaultLevelLabel(defaultLevel)];
-                    
+
+                    console.log(`Rendering ${cmd}:`, { selectedRoles, isCustomized, displayRoles });
+
                     // Use data-command with the original command name (spaces intact)
                     html += `
-                        <div class="command-card" 
-                             data-command="${escapeHtml(cmd)}" 
-                             data-customized="${isCustomized}" 
+                        <div class="command-card"
+                             data-command="${escapeHtml(cmd)}"
+                             data-customized="${isCustomized}"
                              data-default="${defaultLevel}">
                             <div class="command-name">
                                 <code>/${escapeHtml(cmd)}</code>
@@ -777,7 +797,7 @@
                             </div>
                             <div class="command-permissions">
                                 <div class="current-perms">
-                                    ${displayRoles.map(role => 
+                                    ${displayRoles.map(role =>
                                         `<span class="perm-tag ${isCustomized ? '' : 'perm-tag-default'}">${escapeHtml(role)}</span>`
                                     ).join('')}
                                 </div>
@@ -788,15 +808,20 @@
                         </div>
                     `;
                 }
-                
+
                 html += `</div></div>`;
             }
-            
+
             container.innerHTML = html;
             document.getElementById('totalCommands').textContent = totalCommands;
             document.getElementById('customizedCommands').textContent = customizedCount;
+
+            console.log(`Rendered ${totalCommands} total commands, ${customizedCount} customized`);
         }
-        
+
+        // Rest of your JavaScript functions remain the same...
+        // (toggleCategory, openRoleSelector, handleRoleCheckboxClick, etc.)
+
         function toggleCategory(header) {
             header.classList.toggle('collapsed');
             const content = header.nextElementSibling;
@@ -804,17 +829,17 @@
                 content.classList.toggle('collapsed');
             }
         }
-        
+
         function openRoleSelector(commandName) {
             currentEditingCommand = commandName;
             tempSelectedRoles = [...(savedPerms[commandName] || [])];
-            
+
             console.log("Opening selector for:", commandName);
             console.log("Current saved roles:", savedPerms[commandName]);
             console.log("Temp roles:", tempSelectedRoles);
-            
+
             document.getElementById('currentCommandName').textContent = `/${commandName}`;
-            
+
             const roleList = document.getElementById('roleList');
             let html = `
                 <div class="role-option" onclick="toggleAllRoles()">
@@ -823,13 +848,13 @@
                 </div>
                 <hr style="margin: 10px 0; border-color: var(--border);">
             `;
-            
+
             for (const role of roles) {
                 const isChecked = tempSelectedRoles.includes(role.name);
                 html += `
                     <div class="role-option" data-role-name="${escapeHtml(role.name)}">
-                        <input type="checkbox" 
-                               id="role-checkbox-${role.id}" 
+                        <input type="checkbox"
+                               id="role-checkbox-${role.id}"
                                ${isChecked ? 'checked' : ''}
                                onclick="event.stopPropagation(); handleRoleCheckboxClick('${escapeHtml(role.name).replace(/'/g, "\\'")}', this.checked)">
                         <div class="role-color" style="background: ${role.color ? '#' + role.color.toString(16).padStart(6, '0') : '#99aab5'}"></div>
@@ -837,11 +862,11 @@
                     </div>
                 `;
             }
-            
+
             roleList.innerHTML = html;
             document.getElementById('roleSelector').classList.add('active');
         }
-        
+
         function handleRoleCheckboxClick(roleName, isChecked) {
             if (isChecked) {
                 if (!tempSelectedRoles.includes(roleName)) {
@@ -850,94 +875,91 @@
             } else {
                 tempSelectedRoles = tempSelectedRoles.filter(r => r !== roleName);
             }
-            
-            // Update select all checkbox
+
             const selectAll = document.getElementById('selectAllCheckbox');
             if (selectAll) {
                 selectAll.checked = tempSelectedRoles.length === roles.length;
             }
-            
+
             console.log("Updated temp roles:", tempSelectedRoles);
         }
-        
+
         function toggleAllRoles() {
             const selectAll = document.getElementById('selectAllCheckbox');
             const newState = !selectAll.checked;
-            
+
             if (newState) {
                 tempSelectedRoles = roles.map(r => r.name);
             } else {
                 tempSelectedRoles = [];
             }
-            
-            // Update all checkboxes
+
             for (const role of roles) {
                 const checkbox = document.getElementById(`role-checkbox-${role.id}`);
                 if (checkbox) {
                     checkbox.checked = newState;
                 }
             }
-            
+
             selectAll.checked = newState;
             console.log("Toggled all roles:", tempSelectedRoles);
         }
-        
+
         function closeRoleSelector() {
             document.getElementById('roleSelector').classList.remove('active');
             currentEditingCommand = null;
             tempSelectedRoles = [];
         }
-        
+
         async function saveCommandPermissions() {
             if (!currentEditingCommand) {
                 console.error("No command selected for saving");
                 return;
             }
-            
+
             console.log(`Saving ${currentEditingCommand} with roles:`, tempSelectedRoles);
-            
+
             const formData = new FormData();
             formData.append('form_type', 'save_cmd_perms');
-            // Always include the has_cmd_ field to indicate this command should be processed
             formData.append(`has_cmd_${currentEditingCommand}`, '1');
-            
-            // Add each role separately (formData will create multiple entries for the same key)
+
             for (const role of tempSelectedRoles) {
                 formData.append(`cmd_${currentEditingCommand}`, role);
             }
-            
-            // If no roles selected, we still want to send the has_cmd_ field
-            // This tells the server to delete the permissions
+
             if (tempSelectedRoles.length === 0) {
                 formData.append(`cmd_${currentEditingCommand}`, '');
             }
-            
+
             try {
-                const response = await fetch(`/dashboard/${guildId}/commands`, { 
-                    method: 'POST', 
-                    body: formData 
+                const response = await fetch(`/dashboard/${guildId}/commands`, {
+                    method: 'POST',
+                    body: formData
                 });
                 const result = await response.json();
-                
+
                 console.log("Save response:", result);
-                
+
                 if (result.success) {
-                    // Update local state immediately
+                    // Update local state
                     if (tempSelectedRoles.length === 0) {
                         delete savedPerms[currentEditingCommand];
                     } else {
                         savedPerms[currentEditingCommand] = [...tempSelectedRoles];
                     }
-                    
+
+                    console.log("Updated savedPerms:", savedPerms);
+
                     // Re-render to reflect changes
                     renderCommands();
-                    
+
                     // Update debug info
-                    document.getElementById('debugInfo').textContent = 
+                    document.getElementById('debugInfo').textContent =
                         `Guild ID: ${guildId}\n` +
                         `Roles (${roles.length}): ${roles.map(r => r.name).join(', ')}\n` +
-                        `Saved Permissions: ${JSON.stringify(savedPerms, null, 2)}`;
-                    
+                        `Saved Permissions:\n${JSON.stringify(savedPerms, null, 2)}\n` +
+                        `Number of saved commands: ${Object.keys(savedPerms).length}`;
+
                     showToast(`✅ Saved permissions for /${currentEditingCommand}`, 'success');
                     closeRoleSelector();
                 } else {
@@ -948,21 +970,21 @@
                 showToast(`❌ Network error: ${error.message}`, 'error');
             }
         }
-        
+
         async function saveAllChanges() {
             let customizedCount = 0;
             for (const [cmd, roles] of Object.entries(savedPerms)) {
                 if (roles.length > 0) customizedCount++;
             }
-            
+
             if (customizedCount === 0) {
                 showToast('No customized commands to save', 'info');
                 return;
             }
-            
+
             const formData = new FormData();
             formData.append('form_type', 'save_cmd_perms');
-            
+
             for (const [cmd, roles] of Object.entries(savedPerms)) {
                 if (roles.length > 0) {
                     formData.append(`has_cmd_${cmd}`, '1');
@@ -971,18 +993,18 @@
                     }
                 }
             }
-            
+
             showToast('💾 Saving all changes...', 'info');
-            
+
             try {
-                const response = await fetch(`/dashboard/${guildId}/commands`, { 
-                    method: 'POST', 
-                    body: formData 
+                const response = await fetch(`/dashboard/${guildId}/commands`, {
+                    method: 'POST',
+                    body: formData
                 });
                 const result = await response.json();
-                
+
                 console.log("Save all response:", result);
-                
+
                 if (result.success) {
                     showToast(`✅ Saved ${result.saved.length} command permission(s)!`, 'success');
                 } else {
@@ -993,30 +1015,29 @@
                 showToast(`❌ Network error: ${error.message}`, 'error');
             }
         }
-        
+
         function showToast(message, type = 'success') {
-            // Remove existing toasts
             const existingToasts = document.querySelectorAll('.toast');
             existingToasts.forEach(t => t.remove());
-            
+
             const toast = document.createElement('div');
             toast.className = `toast ${type}`;
             toast.textContent = message;
             document.body.appendChild(toast);
-            
+
             setTimeout(() => {
                 if (toast.parentNode) {
                     toast.remove();
                 }
             }, 3000);
         }
-        
+
         function setupFilters() {
             const searchInput = document.getElementById('searchInput');
             if (searchInput) {
                 searchInput.addEventListener('input', filterCommands);
             }
-            
+
             const filterBtns = document.querySelectorAll('.filter-btn');
             filterBtns.forEach(btn => {
                 btn.addEventListener('click', () => {
@@ -1026,34 +1047,34 @@
                 });
             });
         }
-        
+
         function filterCommands() {
             const searchTerm = (document.getElementById('searchInput')?.value || '').toLowerCase();
             const activeFilterBtn = document.querySelector('.filter-btn.active');
             const activeFilter = activeFilterBtn ? activeFilterBtn.getAttribute('data-filter') : 'all';
-            
+
             const categorySections = document.querySelectorAll('.category-section');
-            
+
             for (const section of categorySections) {
                 let hasVisibleCommands = false;
                 const commandCards = section.querySelectorAll('.command-card');
-                
+
                 for (const card of commandCards) {
                     const commandName = (card.querySelector('.command-name code')?.textContent || '').toLowerCase();
                     const isCustomized = card.getAttribute('data-customized') === 'true';
                     const defaultLevel = card.getAttribute('data-default');
-                    
+
                     let matchesFilter = true;
-                    switch(activeFilter) {
+                    switch (activeFilter) {
                         case 'admin': matchesFilter = defaultLevel === 'admin'; break;
                         case 'mod': matchesFilter = defaultLevel === 'mod'; break;
                         case 'staff': matchesFilter = defaultLevel === 'staff'; break;
                         case 'customized': matchesFilter = isCustomized; break;
                         case 'default': matchesFilter = !isCustomized; break;
                     }
-                    
+
                     const matchesSearch = commandName.includes(searchTerm);
-                    
+
                     if (matchesFilter && matchesSearch) {
                         card.style.display = '';
                         hasVisibleCommands = true;
@@ -1061,30 +1082,31 @@
                         card.style.display = 'none';
                     }
                 }
-                
+
                 section.style.display = hasVisibleCommands ? '' : 'none';
             }
         }
-        
+
         // Close role selector when clicking outside
         document.getElementById('roleSelector').addEventListener('click', function(e) {
             if (e.target === this) {
                 closeRoleSelector();
             }
         });
-        
+
         // ESC key to close selector
         document.addEventListener('keydown', function(e) {
             if (e.key === 'Escape') {
                 closeRoleSelector();
             }
         });
-        
+
         // Initialize
-        console.log("Initializing...");
+        console.log("=== INITIALIZATION START ===");
+        console.log("savedPerms at init:", savedPerms);
         renderCommands();
         setupFilters();
-        console.log("Initialization complete");
+        console.log("=== INITIALIZATION COMPLETE ===");
     </script>
 </body>
 </html>
