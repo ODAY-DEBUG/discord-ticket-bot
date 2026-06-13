@@ -112,12 +112,15 @@ def transcripts():
     if "access_token" not in session:
         return redirect("/")
 
+    if db is None:
+        return "<h1>Error: Database connection not available!</h1>", 500
+
     guilds = session.get("guilds", [])
 
     transcripts_by_guild = {}
     for guild in guilds:
         guild_id = int(guild["id"])
-        guild_transcripts = list(db["transcripts"].find({"guild_id": guild_id}).sort("closed_at", -1).limit(50)) if db else []
+        guild_transcripts = list(db["transcripts"].find({"guild_id": guild_id}).sort("closed_at", -1).limit(50))
 
         if guild_transcripts:
             transcripts_by_guild[guild["name"]] = {"id": guild_id, "transcripts": guild_transcripts}
@@ -131,7 +134,7 @@ def view_transcript(transcript_id):
     if "access_token" not in session:
         return redirect("/")
 
-    if not db:
+    if db is None:
         abort(500, "Database connection not available")
 
     try:
@@ -158,7 +161,7 @@ def view_transcript_raw(transcript_id):
     if "access_token" not in session:
         return redirect("/")
 
-    if not db:
+    if db is None:
         abort(500, "Database connection not available")
 
     try:
@@ -186,7 +189,7 @@ def guild_dashboard(guild_id):
     if "access_token" not in session:
         return redirect("/")
     
-    if not db:
+    if db is None:
         return "<h1>Error: Database connection not available!</h1>", 500
 
     # Handle Saving Settings
@@ -422,7 +425,8 @@ def commands_dashboard(guild_id):
     if "access_token" not in session:
         return redirect("/")
     
-    if not db:
+    # Fixed: Use 'is None' instead of 'not db'
+    if db is None:
         logger.error("❌ Database connection not available!")
         if request.method == "POST":
             return jsonify({"success": False, "error": "Database connection not available"}), 500
@@ -598,6 +602,39 @@ def commands_dashboard(guild_id):
         settings=settings,
         timestamp=datetime.now().timestamp()
     )
+
+
+@app.route("/test-mongodb")
+def test_mongodb_route():
+    """Diagnostic endpoint to test MongoDB connection."""
+    if db is None:
+        return jsonify({"error": "Database not connected"}), 500
+    
+    try:
+        # Test write
+        test_guild = 999999
+        test_cmd = "_test_command_"
+        
+        result = db["command_perms"].update_one(
+            {"guild_id": test_guild, "command_name": test_cmd},
+            {"$set": {"roles": ["test_role"], "guild_id": test_guild, "command_name": test_cmd}},
+            upsert=True
+        )
+        
+        # Test read
+        doc = db["command_perms"].find_one({"guild_id": test_guild, "command_name": test_cmd})
+        
+        # Clean up
+        db["command_perms"].delete_one({"guild_id": test_guild, "command_name": test_cmd})
+        
+        return jsonify({
+            "success": True,
+            "insert_result": str(result.raw_result),
+            "document_found": doc is not None,
+            "document": str(doc)
+        })
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 
 if __name__ == "__main__":
