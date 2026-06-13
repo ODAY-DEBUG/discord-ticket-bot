@@ -34,6 +34,7 @@ COGS = [
     'cogs.logging',
     'cogs.autorole',
     'cogs.applications',
+    'cogs.staff_utils',  # ADD THIS LINE
 ]
 
 
