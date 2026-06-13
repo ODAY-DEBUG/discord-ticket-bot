@@ -424,187 +424,186 @@ def commands_dashboard(guild_id):
     """Command permissions management page."""
     if "access_token" not in session:
         return redirect("/")
-    
+
     if db is None:
-        logger.error("❌ Database connection not available!")
+        logger.error("❌ [CMD_PERMS] db is None — MongoDB never connected!")
         if request.method == "POST":
             return jsonify({"success": False, "error": "Database connection not available"}), 500
         return "<h1>Error: Database connection not available!</h1>", 500
-    
-    # Handle POST request (saving permissions)
+
+    # ------------------------------------------------------------------ POST
     if request.method == "POST":
         form_type = request.form.get("form_type")
-        
-        if form_type == "save_cmd_perms":
-            logger.info("=" * 60)
-            logger.info(f"📝 SAVING COMMAND PERMISSIONS for guild {guild_id}")
-            logger.info(f"📝 All form keys: {list(request.form.keys())}")
-            logger.info(f"📝 Form data: {dict(request.form)}")
-            logger.info("=" * 60)
-            
-            try:
-                saved_commands = []
-                
-                # Deduplicate keys — request.form is a MultiDict and .keys()
-                # can return the same key multiple times, which would cause a
-                # command to be processed twice (the second pass seeing no roles
-                # and deleting what was just saved).
-                seen_commands = set()
+        logger.info(f"[CMD_PERMS] POST received | guild={guild_id} | form_type={form_type!r}")
 
-                for key in request.form.keys():
-                    if not key.startswith("has_cmd_"):
-                        continue
+        if form_type != "save_cmd_perms":
+            logger.warning(f"[CMD_PERMS] Unknown form_type: {form_type!r}")
+            return jsonify({"success": False, "error": f"Unknown form_type: {form_type}"}), 400
 
-                    command_name = key[8:]  # Remove "has_cmd_" prefix
+        # --- log every raw form field so we can see exactly what arrived ----
+        logger.info("[CMD_PERMS] ---- RAW FORM DUMP START ----")
+        for k in request.form.keys():
+            logger.info(f"[CMD_PERMS]   {k!r} => {request.form.getlist(k)!r}")
+        logger.info("[CMD_PERMS] ---- RAW FORM DUMP END ----")
 
-                    if command_name in seen_commands:
-                        continue
-                    seen_commands.add(command_name)
+        # --- check db is still alive before touching it --------------------
+        try:
+            db.command("ping")
+            logger.info("[CMD_PERMS] ✅ MongoDB ping OK before save")
+        except Exception as ping_err:
+            logger.error(f"[CMD_PERMS] ❌ MongoDB ping FAILED: {ping_err}")
+            return jsonify({"success": False, "error": f"MongoDB unreachable: {ping_err}"}), 500
 
-                    logger.info(f"\n📌 Processing command: '{command_name}'")
+        try:
+            saved_commands = []
+            seen_commands = set()
 
-                    # Get the roles for this command
-                    raw_roles = request.form.getlist(f"cmd_{command_name}")
-                    # Clean and validate roles - filter out empty strings
-                    roles = [r.strip() for r in raw_roles if r and r.strip()]
+            for key in request.form.keys():
+                if not key.startswith("has_cmd_"):
+                    continue
 
-                    logger.info(f"   Raw roles from form: {raw_roles}")
-                    logger.info(f"   Cleaned roles: {roles}")
-                    logger.info(f"   Command name repr: {repr(command_name)}")
-                    logger.info(f"   Guild ID: {guild_id}")
+                command_name = key[8:]  # strip "has_cmd_"
 
-                    if roles:
-                        # Update or insert the permissions
-                        try:
-                            result = db["command_perms"].update_one(
-                                {"guild_id": guild_id, "command_name": command_name},
-                                {"$set": {
-                                    "guild_id": guild_id,
-                                    "command_name": command_name,
-                                    "roles": roles
-                                }},
-                                upsert=True
+                # MultiDict.keys() can yield the same key more than once
+                if command_name in seen_commands:
+                    logger.warning(f"[CMD_PERMS] Duplicate key skipped: {command_name!r}")
+                    continue
+                seen_commands.add(command_name)
+
+                raw_roles = request.form.getlist(f"cmd_{command_name}")
+                roles = [r.strip() for r in raw_roles if r and r.strip()]
+
+                logger.info(f"[CMD_PERMS] Command {command_name!r} | raw_roles={raw_roles!r} | clean_roles={roles!r}")
+
+                if roles:
+                    try:
+                        result = db["command_perms"].update_one(
+                            {"guild_id": guild_id, "command_name": command_name},
+                            {"$set": {
+                                "guild_id": guild_id,
+                                "command_name": command_name,
+                                "roles": roles
+                            }},
+                            upsert=True
+                        )
+                        logger.info(
+                            f"[CMD_PERMS] UPSERT {command_name!r} | "
+                            f"matched={result.matched_count} modified={result.modified_count} "
+                            f"upserted_id={result.upserted_id}"
+                        )
+
+                        # immediate read-back to confirm it landed
+                        verify = db["command_perms"].find_one(
+                            {"guild_id": guild_id, "command_name": command_name}
+                        )
+                        if verify is None:
+                            logger.error(f"[CMD_PERMS] ❌ READ-BACK FAILED for {command_name!r} — doc not found!")
+                        elif verify.get("roles") != roles:
+                            logger.error(
+                                f"[CMD_PERMS] ❌ READ-BACK MISMATCH for {command_name!r} | "
+                                f"expected={roles!r} got={verify.get('roles')!r}"
                             )
-                            saved_commands.append(command_name)
-                            logger.info(f"   ✅ MongoDB update result:")
-                            logger.info(f"      - Matched: {result.matched_count}")
-                            logger.info(f"      - Modified: {result.modified_count}")
-                            logger.info(f"      - Upserted ID: {result.upserted_id}")
+                        else:
+                            logger.info(f"[CMD_PERMS] ✅ Read-back OK for {command_name!r}: {roles!r}")
 
-                            # Verify the save immediately
-                            verify = db["command_perms"].find_one({
-                                "guild_id": guild_id,
-                                "command_name": command_name
-                            })
-                            logger.info(f"   🔍 Verification: {verify}")
+                        saved_commands.append(command_name)
 
-                            if verify is None:
-                                logger.error(f"   ❌ SAVE FAILED - Document not found after save!")
-                            elif verify.get("roles") != roles:
-                                logger.error(f"   ❌ SAVE MISMATCH - Expected {roles}, got {verify.get('roles')}")
-                            else:
-                                logger.info(f"   ✅ Save verified successfully")
+                    except Exception as db_err:
+                        logger.error(f"[CMD_PERMS] ❌ DB error upserting {command_name!r}: {db_err}", exc_info=True)
+                        raise
 
-                        except Exception as db_error:
-                            logger.error(f"   ❌ MongoDB error: {db_error}")
-                            raise
-                    else:
-                        # No roles selected, delete existing permissions
-                        try:
-                            result = db["command_perms"].delete_one({
-                                "guild_id": guild_id,
-                                "command_name": command_name
-                            })
-                            logger.info(f"   🗑️ Delete result: deleted={result.deleted_count}")
+                else:
+                    # no roles selected → delete the document
+                    try:
+                        result = db["command_perms"].delete_one(
+                            {"guild_id": guild_id, "command_name": command_name}
+                        )
+                        logger.info(f"[CMD_PERMS] DELETE {command_name!r} | deleted_count={result.deleted_count}")
 
-                            # Verify deletion
-                            verify = db["command_perms"].find_one({
-                                "guild_id": guild_id,
-                                "command_name": command_name
-                            })
-                            if verify is None:
-                                logger.info(f"   ✅ Deletion verified")
-                                saved_commands.append(command_name)
-                            else:
-                                logger.error(f"   ❌ Deletion failed - document still exists!")
+                        verify = db["command_perms"].find_one(
+                            {"guild_id": guild_id, "command_name": command_name}
+                        )
+                        if verify is None:
+                            logger.info(f"[CMD_PERMS] ✅ Deletion confirmed for {command_name!r}")
+                        else:
+                            logger.error(f"[CMD_PERMS] ❌ Document still present after delete for {command_name!r}!")
 
-                        except Exception as db_error:
-                            logger.error(f"   ❌ MongoDB delete error: {db_error}")
-                            raise
+                        saved_commands.append(command_name)
 
-                # Final verification - show all saved permissions for this guild
-                all_saved = list(db["command_perms"].find({"guild_id": guild_id}))
-                logger.info(f"\n📋 FINAL DATABASE STATE for guild {guild_id}:")
-                for doc in all_saved:
-                    logger.info(f"   /{doc['command_name']}: {doc['roles']}")
-                logger.info(f"   Total documents: {len(all_saved)}")
+                    except Exception as db_err:
+                        logger.error(f"[CMD_PERMS] ❌ DB error deleting {command_name!r}: {db_err}", exc_info=True)
+                        raise
 
-                logger.info(f"\n✅ Successfully processed {len(saved_commands)} commands")
-                logger.info("=" * 60)
+            # final state dump
+            all_saved = list(db["command_perms"].find({"guild_id": guild_id}))
+            logger.info(f"[CMD_PERMS] ---- FINAL DB STATE ({len(all_saved)} docs) ----")
+            for doc in all_saved:
+                logger.info(f"[CMD_PERMS]   /{doc['command_name']} => {doc['roles']!r}")
+            logger.info("[CMD_PERMS] ---- END FINAL DB STATE ----")
 
-                return jsonify({
-                    "success": True,
-                    "message": f"Saved permissions for {len(saved_commands)} command(s)",
-                    "saved": saved_commands
-                })
+            logger.info(f"[CMD_PERMS] ✅ Done. Processed {len(saved_commands)} command(s): {saved_commands}")
+            return jsonify({
+                "success": True,
+                "message": f"Saved permissions for {len(saved_commands)} command(s)",
+                "saved": saved_commands
+            })
 
-            except Exception as e:
-                logger.error(f"❌ Error saving permissions: {e}")
-                import traceback
-                traceback.print_exc()
-                return jsonify({"success": False, "error": str(e)}), 500
-    
-    # GET request - display the page
+        except Exception as e:
+            logger.error(f"[CMD_PERMS] ❌ Unhandled exception during save: {e}", exc_info=True)
+            return jsonify({"success": False, "error": str(e)}), 500
+
+    # ------------------------------------------------------------------ GET
     if not BOT_TOKEN:
         return "<h1>Error: Discord bot token missing!</h1>", 500
-    
+
     bot_headers = {"Authorization": f"Bot {BOT_TOKEN}", "User-Agent": "DashboardBot/1.0"}
-    
-    # Fetch Roles from Discord
+
+    # Fetch roles from Discord
     try:
         roles_res = requests.get(f"https://discord.com/api/v10/guilds/{guild_id}/roles", headers=bot_headers)
+        logger.info(f"[CMD_PERMS] Discord roles fetch | status={roles_res.status_code}")
         if roles_res.status_code == 200:
             roles = [
-                {
-                    "id": str(r["id"]),
-                    "name": r["name"],
-                    "color": r["color"]
-                }
+                {"id": str(r["id"]), "name": r["name"], "color": r["color"]}
                 for r in roles_res.json()
                 if r["name"] != "@everyone" and not r["managed"]
             ]
-            logger.info(f"✅ Fetched {len(roles)} roles for guild {guild_id}")
+            logger.info(f"[CMD_PERMS] Fetched {len(roles)} roles: {[r['name'] for r in roles]}")
         else:
-            logger.error(f"❌ Failed to fetch roles: {roles_res.status_code}")
+            logger.error(f"[CMD_PERMS] ❌ Discord roles fetch failed: {roles_res.text}")
             roles = []
     except Exception as e:
-        logger.error(f"❌ Error fetching roles: {e}")
+        logger.error(f"[CMD_PERMS] ❌ Exception fetching roles: {e}", exc_info=True)
         roles = []
-    
+
     # Fetch saved command permissions from MongoDB
     command_perms = {}
     try:
+        # ping first so we know if db is reachable
+        db.command("ping")
+        logger.info("[CMD_PERMS] ✅ MongoDB ping OK on GET")
+
         all_docs = list(db["command_perms"].find({"guild_id": guild_id}))
-        logger.info(f"\n📋 DATABASE CHECK for guild {guild_id}:")
-        logger.info(f"   Total documents found: {len(all_docs)}")
-        
+        logger.info(f"[CMD_PERMS] Loaded {len(all_docs)} permission docs for guild {guild_id}")
         for doc in all_docs:
             command_perms[doc["command_name"]] = doc["roles"]
-            logger.info(f"   /{doc['command_name']}: {doc['roles']}")
-        
-        if len(all_docs) == 0:
-            logger.info("   No permissions found in database for this guild")
+            logger.info(f"[CMD_PERMS]   /{doc['command_name']} => {doc['roles']!r}")
+
+        if not all_docs:
+            logger.info("[CMD_PERMS] No saved permissions found for this guild")
+
     except Exception as e:
-        logger.error(f"❌ Error fetching from database: {e}")
-    
+        logger.error(f"[CMD_PERMS] ❌ Exception reading from MongoDB: {e}", exc_info=True)
+
     guild_name = "Unknown Server"
     for g in session.get("guilds", []):
         if int(g["id"]) == guild_id:
             guild_name = g["name"]
             break
-    
+
     settings = {"command_perms": command_perms}
-    
+    logger.info(f"[CMD_PERMS] Rendering commands.html | guild={guild_name} | perms_count={len(command_perms)}")
+
     return render_template(
         "commands.html",
         guild_id=guild_id,
