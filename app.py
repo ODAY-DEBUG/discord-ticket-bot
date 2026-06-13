@@ -165,6 +165,34 @@ def view_transcript_raw(transcript_id):
     ] = f"attachment; filename=transcript-{transcript['channel_name']}.html"
     return response
 
+@app.route("/dashboard/<int:guild_id>/commands")
+def commands_dashboard(guild_id):
+    """Command permissions management page."""
+    if "access_token" not in session:
+        return redirect("/")
+    
+    if not BOT_TOKEN:
+        return "<h1>Error: Discord bot token missing!</h1>", 500
+    
+    bot_headers = {"Authorization": f"Bot {BOT_TOKEN}", "User-Agent": "DashboardBot/1.0"}
+    
+    # Fetch Roles
+    roles_res = requests.get(f"https://discord.com/api/v10/guilds/{guild_id}/roles", headers=bot_headers)
+    roles = roles_res.json() if roles_res.status_code == 200 else []
+    roles = [r for r in roles if r["name"] != "@everyone" and not r["managed"]]
+    
+    # Fetch saved command permissions
+    command_perms = {doc["command_name"]: doc["roles"] for doc in db["command_perms"].find({"guild_id": guild_id})}
+    
+    guild_name = "Unknown Server"
+    for g in session.get("guilds", []):
+        if int(g["id"]) == guild_id:
+            guild_name = g["name"]
+            break
+    
+    settings = {"command_perms": command_perms}
+    
+    return render_template("commands.html", guild_id=guild_id, guild_name=guild_name, roles=roles, settings=settings)
 
 @app.route("/dashboard/<int:guild_id>", methods=["GET", "POST"])
 def guild_dashboard(guild_id):

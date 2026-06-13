@@ -56,7 +56,7 @@
     <div class="nav-category">Moderation</div>
     <div class="nav-item" onclick="switchTab('automod', this)">🛡️ AutoMod</div>
     <div class="nav-item" onclick="switchTab('config', this)">⚙️ Roles & Config</div>
-    <div class="nav-item" onclick="switchTab('commands', this)">🔑 Commands</div>
+    <div class="nav-item" onclick="window.location.href='/dashboard/{{ guild_id }}/commands'">🔑 Command Permissions</div>
     
     <div class="nav-category">Tickets & Apps</div>
     <div class="nav-item" onclick="switchTab('applications', this)">📝 Applications</div>
@@ -213,48 +213,7 @@
             </form>
         </div>
 
-        <!-- COMMANDS CARD -->
-        <div id="commands" class="card">
-            <h3>Command Permissions</h3>
-            <p>Select which roles can use specific commands. Leave empty to use the bot's default permissions. Administrators always bypass these checks.</p>
-            <form method="POST">
-                <input type="hidden" name="form_type" value="save_cmd_perms">
-                
-                {% set commands_list = [
-                    ("Moderation", ["mute", "unmute", "kick", "ban", "unban", "warn", "warnings", "clearwarnings", "purge", "lock", "unlock", "rename", "add", "remove"]),
-                    ("Giveaways", ["giveaway", "endgiveaway", "reroll"]),
-                    ("Sticky", ["sticky", "unsticky"]),
-                    ("Tickets", ["ticketpanel", "close"]),
-                    ("Reaction Roles", ["reactionrole add", "reactionrole remove"]),
-                    ("Welcome", ["welcome", "welcome_disable"]),
-                    ("AutoMod", ["automod links", "automod invites", "automod addword", "automod removeword", "automod listwords", "automod addchannel", "automod removechannel", "automod listchannels"]),
-                    ("Logging", ["setlogchannel"]),
-                    ("Autorole", ["autorole", "autorole_disable"])
-                ] %}
-                
-                {% for category, cmds in commands_list %}
-                    <h4 style="color:var(--accent); margin-top:20px; margin-bottom:10px; border-bottom:1px solid var(--border); padding-bottom:5px;">{{ category }}</h4>
-                    {% for cmd in cmds %}
-                    <div class="cmd-row" style="flex-direction: column; align-items: flex-start;">
-                        <div class="cmd-name" style="margin-bottom: 10px;">/{{ cmd }}</div>
-                        <input type="hidden" name="has_cmd_{{ cmd }}" value="1">
-                        <div class="cmd-roles" style="width: 100%; margin-left: 0;">
-                            <div class="multiselect-container" style="max-height: 120px; width: 100%; overflow-y: auto; background-color: var(--input-bg); border-radius: 6px; padding: 12px; border: 1px solid var(--border);">
-                                {% for role in roles|sort(attribute='position', reverse=True) %}
-                                <label style="display: flex; gap: 10px; margin-bottom: 5px; cursor: pointer; font-weight: normal; text-transform: none; font-size: 14px; color: var(--text-main);">
-                                    <input type="checkbox" name="cmd_{{ cmd }}" value="{{ role.name }}" style="width: 18px; height: 18px; accent-color: var(--accent);" {% if cmd in settings.command_perms and role.name in settings.command_perms[cmd] %}checked{% endif %}> 
-                                    {{ role.name }}
-                                </label>
-                                {% endfor %}
-                            </div>
-                        </div>
-                    </div>
-                    {% endfor %}
-                {% endfor %}
-                <button type="submit" style="margin-top:20px;">Save Command Permissions</button>
-            </form>
-        </div>
-
+  
         <!-- APPLICATIONS CARD -->
         <div id="applications" class="card">
             <h3>Applications</h3>
