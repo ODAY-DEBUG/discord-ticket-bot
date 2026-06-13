@@ -608,7 +608,7 @@
     
     <script>
         // Constants from server
-        const guildId = {{ guild_id }};
+	const guildId = "{{ guild_id }}";
         const roles = {{ roles | tojson }};
         let savedPerms = {{ settings.command_perms | tojson }};
 
