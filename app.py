@@ -159,251 +159,104 @@ def view_transcript_raw(transcript_id):
     return response
 
 
-@app.route("/dashboard/<int:guild_id>", methods=["GET", "POST"])
-def guild_dashboard(guild_id):
+@app.route("/dashboard/<int:guild_id>/commands", methods=["GET", "POST"])
+def commands_dashboard(guild_id):
+    """Command permissions management page."""
     if "access_token" not in session:
         return redirect("/")
-
-    # Handle Saving Settings
+    
+    # Handle POST request (saving permissions)
     if request.method == "POST":
         form_type = request.form.get("form_type")
-
-        if form_type == "autorole":
-            role_id = request.form.get("autorole_id")
-            if role_id and role_id != "none":
-                db["autorole_settings"].update_one(
-                    {"guild_id": guild_id}, {"$set": {"role_id": int(role_id)}}, upsert=True
-                )
-            elif role_id == "none":
-                db["autorole_settings"].delete_one({"guild_id": guild_id})
-
-        elif form_type == "welcome":
-            channel_id = request.form.get("welcome_channel_id")
-            message = request.form.get("welcome_message")
-            if channel_id and channel_id != "none":
-                db["welcome_settings"].update_one(
-                    {"guild_id": guild_id},
-                    {"$set": {"channel_id": int(channel_id), "message": message}},
-                    upsert=True,
-                )
-            elif channel_id == "none":
-                db["welcome_settings"].delete_one({"guild_id": guild_id})
-
-        elif form_type == "logging":
-            channel_id = request.form.get("log_channel_id")
-            transcript_channel_id = request.form.get("TRANSCRIPT_CHANNEL_ID")
-
-            if channel_id and channel_id != "none":
-                db["log_settings"].update_one(
-                    {"guild_id": guild_id}, {"$set": {"channel_id": int(channel_id)}}, upsert=True
-                )
-            elif channel_id == "none":
-                db["log_settings"].delete_one({"guild_id": guild_id})
-
-            db["bot_config"].update_one(
-                {"guild_id": guild_id},
-                {
-                    "$set": {
-                        "TRANSCRIPT_CHANNEL_ID": int(transcript_channel_id)
-                        if transcript_channel_id and transcript_channel_id != "none"
-                        else None
-                    }
-                },
-                upsert=True,
-            )
-
-        elif form_type == "automod":
-            block_links = request.form.get("block_links") == "on"
-            block_invites = request.form.get("block_invites") == "on"
-            banned_words = [w.strip() for w in request.form.get("banned_words", "").split(",") if w.strip()]
-            active_channels = request.form.getlist("automod_channels")
-            active_channels = [int(c) for c in active_channels]
-
-            db["automod_settings"].update_one(
-                {"guild_id": guild_id},
-                {
-                    "$set": {
-                        "block_links": block_links,
-                        "block_invites": block_invites,
-                        "banned_words": banned_words,
-                        "active_channels": active_channels,
-                    }
-                },
-                upsert=True,
-            )
-
-        elif form_type == "announcement":
-            channel_id = request.form.get("announcement_channel_id")
-            message = request.form.get("announcement_message")
-            if channel_id and message:
-                requests.post(
-                    f"https://discord.com/api/v10/channels/{channel_id}/messages",
-                    headers={"Authorization": f"Bot {BOT_TOKEN}", "User-Agent": "DashboardBot/1.0"},
-                    json={"content": message},
-                )
-
-        elif form_type == "config":
-            staff_role = request.form.get("STAFF_ROLE")
-            mod_role = request.form.get("MOD_ROLE")
-            admin_role = request.form.get("ADMIN_ROLE")
-            trusted_staff_role = request.form.get("TRUSTED_STAFF_ROLE")
-            log_channel_id = request.form.get("LOG_CHANNEL_ID")
-            transcript_channel_id = request.form.get("TRANSCRIPT_CHANNEL_ID")
-            builder_orders_channel_id = request.form.get("BUILDER_ORDERS_CHANNEL_ID")
-
-            db["bot_config"].update_one(
-                {"guild_id": guild_id},
-                {
-                    "$set": {
-                        "STAFF_ROLE": staff_role,
-                        "MOD_ROLE": mod_role,
-                        "ADMIN_ROLE": admin_role,
-                        "TRUSTED_STAFF_ROLE": trusted_staff_role,
-                        "LOG_CHANNEL_ID": int(log_channel_id) if log_channel_id and log_channel_id != "none" else None,
-                        "TRANSCRIPT_CHANNEL_ID": int(transcript_channel_id)
-                        if transcript_channel_id and transcript_channel_id != "none"
-                        else None,
-                        "BUILDER_ORDERS_CHANNEL_ID": int(builder_orders_channel_id)
-                        if builder_orders_channel_id and builder_orders_channel_id != "none"
-                        else None,
-                    }
-                },
-                upsert=True,
-            )
-        elif form_type == "create_app":
-            app_id = request.form.get("app_id").lower().replace(" ", "-")
-            app_name = request.form.get("app_name")
-            questions_raw = request.form.get("questions_text", "")
-            questions = [q.strip() for q in questions_raw.split("\n") if q.strip()]
-            is_open = request.form.get("is_open") == "on"
-            submitted_channel_id = request.form.get("submitted_channel_id")
-            accepted_channel_id = request.form.get("accepted_channel_id")
-            denied_channel_id = request.form.get("denied_channel_id")
-
-            if app_id and app_name and questions:
-                db["applications_config"].update_one(
-                    {"guild_id": guild_id, "app_id": app_id},
-                    {
-                        "$set": {
-                            "app_name": app_name,
-                            "questions": questions,
-                            "is_open": is_open,
-                            "submitted_channel_id": int(submitted_channel_id)
-                            if submitted_channel_id and submitted_channel_id != "none"
-                            else None,
-                            "accepted_channel_id": int(accepted_channel_id)
-                            if accepted_channel_id and accepted_channel_id != "none"
-                            else None,
-                            "denied_channel_id": int(denied_channel_id)
-                            if denied_channel_id and denied_channel_id != "none"
-                            else None,
-                        }
-                    },
-                    upsert=True,
-                )
-
-        elif form_type == "send_app_panel":
-            app_id = request.form.get("panel_app_id")
-            panel_channel_id = request.form.get("panel_channel_id")
-
-            app_config = db["applications_config"].find_one({"guild_id": guild_id, "app_id": app_id})
-            if app_config and panel_channel_id:
-                component = {
-                    "type": 1,
-                    "components": [
-                        {
-                            "type": 2,
-                            "label": f"Apply for {app_config['app_name']}",
-                            "style": 1,
-                            "custom_id": f"apply_{app_id}",
-                            "emoji": {"name": "📝"},
-                        }
-                    ],
-                }
-                embed_payload = {
-                    "title": f"📝 {app_config['app_name']}",
-                    "description": "Click the button below to start your application. You will receive a DM from the bot to fill out the questions.",
-                    "color": 0x5865F2,
-                    "footer": {"text": f"App ID: {app_id}"},
-                }
-                requests.post(
-                    f"https://discord.com/api/v10/channels/{panel_channel_id}/messages",
-                    headers={"Authorization": f"Bot {BOT_TOKEN}", "User-Agent": "DashboardBot/1.0"},
-                    json={"embeds": [embed_payload], "components": [component]},
-                )
-
-        elif form_type == "delete_app":
-            app_id = request.form.get("delete_app_id")
-            if app_id:
-                db["applications_config"].delete_one({"guild_id": guild_id, "app_id": app_id})
         
-        elif form_type == "save_cmd_perms":
-            # Process command permissions from settings.html (old way)
-            for key in request.form.keys():
-                if key.startswith("has_cmd_"):
-                    command_name = key[9:]
-                    roles = request.form.getlist(f"cmd_{command_name}")
-                    if roles:
-                        db["command_perms"].update_one(
-                            {"guild_id": guild_id, "command_name": command_name},
-                            {"$set": {"roles": roles}},
-                            upsert=True,
-                        )
-                    else:
-                        db["command_perms"].delete_one({"guild_id": guild_id, "command_name": command_name})
+        if form_type == "save_cmd_perms":
+            print(f"=" * 50)
+            print(f"📝 SAVING COMMAND PERMISSIONS for guild {guild_id}")
+            print(f"=" * 50)
             
-            return redirect(f"/dashboard/{guild_id}#commands")
-
-    # GET Request: Fetch Data for Display
+            try:
+                # Track what we saved
+                saved_count = 0
+                deleted_count = 0
+                
+                # Process each key in the form
+                for key in request.form.keys():
+                    if key.startswith("has_cmd_"):
+                        # Get the command name (remove the prefix)
+                        command_name = key[8:]  # "has_cmd_" is 8 characters
+                        print(f"\n📌 Processing command: {command_name}")
+                        
+                        # Get all roles for this command
+                        roles = request.form.getlist(f"cmd_{command_name}")
+                        # Filter out empty strings and strip whitespace
+                        roles = [r.strip() for r in roles if r and r.strip()]
+                        
+                        print(f"   Roles to save: {roles}")
+                        
+                        if roles:
+                            # Save to database
+                            db["command_perms"].update_one(
+                                {"guild_id": guild_id, "command_name": command_name},
+                                {"$set": {"roles": roles}},
+                                upsert=True
+                            )
+                            saved_count += 1
+                            print(f"   ✅ Saved {len(roles)} role(s) for /{command_name}")
+                        else:
+                            # Delete if no roles
+                            result = db["command_perms"].delete_one({"guild_id": guild_id, "command_name": command_name})
+                            if result.deleted_count > 0:
+                                deleted_count += 1
+                                print(f"   🗑️ Deleted permissions for /{command_name}")
+                            else:
+                                print(f"   ℹ️ No existing permissions for /{command_name}")
+                
+                print(f"\n✅ Summary: Saved {saved_count} commands, Deleted {deleted_count} commands")
+                print(f"=" * 50)
+                
+                # Return JSON response
+                return jsonify({
+                    "success": True, 
+                    "message": f"Saved {saved_count} command permissions",
+                    "saved": saved_count,
+                    "deleted": deleted_count
+                })
+                
+            except Exception as e:
+                print(f"❌ Error saving permissions: {e}")
+                import traceback
+                traceback.print_exc()
+                return jsonify({"success": False, "error": str(e)})
+    
+    # GET request - display the page
     if not BOT_TOKEN:
-        return "<h1>Error: DISCORD_BOT_TOKEN or DISCORD_TOKEN is missing from environment variables!</h1>", 500
-
+        return "<h1>Error: Discord bot token missing!</h1>", 500
+    
     bot_headers = {"Authorization": f"Bot {BOT_TOKEN}", "User-Agent": "DashboardBot/1.0"}
-
+    
     # Fetch Roles
     roles_res = requests.get(f"https://discord.com/api/v10/guilds/{guild_id}/roles", headers=bot_headers)
-    if roles_res.status_code != 200:
-        print(f"❌ ROLES FETCH FAILED: {roles_res.status_code} - {roles_res.text}")
     roles = roles_res.json() if roles_res.status_code == 200 else []
     roles = [r for r in roles if r["name"] != "@everyone" and not r["managed"]]
-
-    # Fetch Channels
-    chans_res = requests.get(f"https://discord.com/api/v10/guilds/{guild_id}/channels", headers=bot_headers)
-    if chans_res.status_code != 200:
-        print(f"❌ CHANNELS FETCH FAILED: {chans_res.status_code} - {chans_res.text}")
-    channels = chans_res.json() if chans_res.status_code == 200 else []
-    text_channels = [c for c in channels if c["type"] == 0]
-
-    # Fetch Settings
-    settings = {
-        "autorole": db["autorole_settings"].find_one({"guild_id": guild_id}),
-        "welcome": db["welcome_settings"].find_one({"guild_id": guild_id}),
-        "logging": db["log_settings"].find_one({"guild_id": guild_id}),
-        "automod": db["automod_settings"].find_one({"guild_id": guild_id}),
-        "config": (
-            lambda cfg: {
-                "STAFF_ROLE": cfg.get("STAFF_ROLE", "Staff"),
-                "MOD_ROLE": cfg.get("MOD_ROLE", "Moderator"),
-                "ADMIN_ROLE": cfg.get("ADMIN_ROLE", "Admin"),
-                "TRUSTED_STAFF_ROLE": cfg.get("TRUSTED_STAFF_ROLE", "Trusted Staff"),
-                "LOG_CHANNEL_ID": cfg.get("LOG_CHANNEL_ID"),
-                "TRANSCRIPT_CHANNEL_ID": cfg.get("TRANSCRIPT_CHANNEL_ID"),
-                "BUILDER_ORDERS_CHANNEL_ID": cfg.get("BUILDER_ORDERS_CHANNEL_ID"),
-            }
-        )(db["bot_config"].find_one({"guild_id": guild_id}) or {}),
-        "applications": list(db["applications_config"].find({"guild_id": guild_id})),
-        "command_perms": {doc["command_name"]: doc["roles"] for doc in db["command_perms"].find({"guild_id": guild_id})},
-    }
-
+    
+    # Fetch saved command permissions
+    command_perms = {}
+    for doc in db["command_perms"].find({"guild_id": guild_id}):
+        command_perms[doc["command_name"]] = doc["roles"]
+    
+    print(f"\n📋 LOADED COMMAND PERMISSIONS for guild {guild_id}:")
+    for cmd, roles in command_perms.items():
+        print(f"   /{cmd}: {roles}")
+    
     guild_name = "Unknown Server"
     for g in session.get("guilds", []):
         if int(g["id"]) == guild_id:
             guild_name = g["name"]
             break
-
-    return render_template(
-        "settings.html", guild_id=guild_id, guild_name=guild_name, roles=roles, channels=text_channels, settings=settings
-    )
+    
+    settings = {"command_perms": command_perms}
+    
+    return render_template("commands.html", guild_id=guild_id, guild_name=guild_name, roles=roles, settings=settings)
 
 
 @app.route("/dashboard/<int:guild_id>/commands", methods=["GET", "POST"])

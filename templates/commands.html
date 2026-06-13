@@ -201,6 +201,7 @@
             padding: 5px 15px;
             font-size: 12px;
             margin: 0;
+            cursor: pointer;
         }
         
         .edit-btn:hover {
@@ -358,6 +359,7 @@
         .save-all-btn {
             background: #2ecc71;
             padding: 10px 25px;
+            cursor: pointer;
         }
         
         .save-all-btn:hover {
@@ -393,12 +395,6 @@
                 transform: translateX(0);
                 opacity: 1;
             }
-        }
-        
-        .empty-state {
-            text-align: center;
-            padding: 60px;
-            color: var(--text-muted);
         }
         
         .sidebar {
@@ -454,6 +450,11 @@
             height: 100vh;
             overflow: hidden;
         }
+        
+        .loading {
+            text-align: center;
+            padding: 40px;
+        }
     </style>
 </head>
 <body>
@@ -499,7 +500,7 @@
             </div>
             
             <div id="commandsContainer">
-                <div class="loading" style="text-align: center; padding: 40px;">Loading commands...</div>
+                <div class="loading">Loading commands...</div>
             </div>
             
             <div class="action-bar">
@@ -517,8 +518,8 @@
             </div>
             <div class="role-list" id="roleList"></div>
             <div class="role-selector-footer">
-                <button onclick="closeRoleSelector()" style="background: #7f8c8d;">Cancel</button>
-                <button onclick="saveCommandPermissions()" style="background: var(--accent);">Save</button>
+                <button onclick="closeRoleSelector()" style="background: #7f8c8d; cursor: pointer;">Cancel</button>
+                <button onclick="saveCommandPermissions()" style="background: var(--accent); cursor: pointer;">Save</button>
             </div>
         </div>
     </div>
@@ -526,13 +527,21 @@
     <script>
         const guildId = {{ guild_id }};
         const roles = {{ roles | tojson }};
-        const savedPerms = {{ settings.command_perms | tojson }};
+        let savedPerms = {{ settings.command_perms | tojson }};
+        
+        console.log("Loaded saved permissions:", savedPerms);
+        console.log("Available roles:", roles);
         
         let currentEditingCommand = null;
         let tempSelectedRoles = [];
         
         const categories = {
-            "Moderation": { emoji: "🔨", order: 1, defaultLevel: "mod", commands: ["mute", "unmute", "kick", "ban", "unban", "warn", "warnings", "clearwarnings", "purge", "lock", "unlock", "rename", "add", "remove", "slowmode", "voicekick", "vcmute", "vcunmute", "nickname", "moveall", "hide", "reveal", "softban"] },
+            "Moderation": { 
+                emoji: "🔨", 
+                order: 1, 
+                defaultLevel: "mod", 
+                commands: ["mute", "unmute", "kick", "ban", "unban", "warn", "warnings", "clearwarnings", "purge", "lock", "unlock", "rename", "add", "remove", "slowmode", "voicekick", "vcmute", "vcunmute", "nickname", "moveall", "hide", "reveal", "softban"] 
+            },
             "Giveaways": { emoji: "🎉", order: 2, defaultLevel: "admin", commands: ["giveaway", "endgiveaway", "reroll"] },
             "Sticky": { emoji: "📌", order: 3, defaultLevel: "staff", commands: ["sticky", "unsticky"] },
             "Tickets": { emoji: "🎫", order: 4, defaultLevel: "staff", commands: ["ticketpanel", "close"] },
@@ -577,25 +586,16 @@
                 
                 totalCommands += commands.length;
                 
-                for (const cmd of commands) {
-                    if (savedPerms[cmd] && savedPerms[cmd].length > 0) {
-                        customizedCount++;
-                    }
-                }
-                
-                const categoryDiv = document.createElement('div');
-                categoryDiv.className = 'category-section';
-                categoryDiv.setAttribute('data-category', category);
-                
                 let commandsHtml = '';
                 for (const cmd of commands) {
                     const selectedRoles = savedPerms[cmd] || [];
                     const isCustomized = selectedRoles.length > 0;
+                    if (isCustomized) customizedCount++;
                     const defaultLevel = getCommandDefaultLevel(cmd);
                     const displayRoles = isCustomized ? selectedRoles : [getDefaultLevelLabel(defaultLevel)];
                     
                     commandsHtml += `
-                        <div class="command-card" data-command="${cmd.replace(/ /g, '-')}" data-customized="${isCustomized}" data-default="${defaultLevel}" data-name="${cmd}">
+                        <div class="command-card" data-command="${cmd}" data-customized="${isCustomized}" data-default="${defaultLevel}">
                             <div class="command-header">
                                 <div class="command-name">
                                     <code>/${cmd}</code>
@@ -613,6 +613,8 @@
                     `;
                 }
                 
+                const categoryDiv = document.createElement('div');
+                categoryDiv.className = 'category-section';
                 categoryDiv.innerHTML = `
                     <div class="category-header" onclick="toggleCategory(this)">
                         <div class="category-title">
@@ -626,7 +628,6 @@
                         ${commandsHtml}
                     </div>
                 `;
-                
                 container.appendChild(categoryDiv);
             }
             
@@ -740,7 +741,7 @@
                     
                     // Update UI
                     const permsDiv = document.getElementById(`perms-${currentEditingCommand.replace(/ /g, '-')}`);
-                    const commandCard = document.querySelector(`.command-card[data-command="${currentEditingCommand.replace(/ /g, '-')}"]`);
+                    const commandCard = document.querySelector(`.command-card[data-command="${currentEditingCommand}"]`);
                     const defaultLevel = getCommandDefaultLevel(currentEditingCommand);
                     
                     if (tempSelectedRoles.length === 0) {
@@ -793,7 +794,7 @@
             let savedCount = 0;
             
             for (const card of commandCards) {
-                const commandName = card.getAttribute('data-name');
+                const commandName = card.getAttribute('data-command');
                 const permsDiv = card.querySelector('.current-perms');
                 const roleSpans = permsDiv.querySelectorAll('.perm-tag:not(.perm-tag-default)');
                 const roles = Array.from(roleSpans).map(span => span.textContent);
@@ -802,7 +803,7 @@
                 for (const role of roles) {
                     formData.append(`cmd_${commandName}`, role);
                 }
-                if (roles.length > 0 || savedPerms[commandName]) savedCount++;
+                savedCount++;
             }
             
             showToast('💾 Saving all changes...', 'info');
@@ -816,7 +817,7 @@
                 const result = await response.json();
                 
                 if (result.success) {
-                    showToast(`✅ Saved ${savedCount} command permission(s)!`, 'success');
+                    showToast(`✅ Saved ${result.saved} command permission(s)!`, 'success');
                     setTimeout(() => window.location.reload(), 1000);
                 } else {
                     showToast(`❌ Failed to save: ${result.error}`, 'error');
@@ -859,7 +860,7 @@
                 const commandCards = section.querySelectorAll('.command-card');
                 
                 for (const card of commandCards) {
-                    const commandName = card.getAttribute('data-name');
+                    const commandName = card.getAttribute('data-command');
                     const isCustomized = card.getAttribute('data-customized') === 'true';
                     const defaultLevel = card.getAttribute('data-default');
                     
