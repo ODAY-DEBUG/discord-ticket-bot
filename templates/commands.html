@@ -347,14 +347,12 @@
             height: 18px;
             cursor: pointer;
             accent-color: var(--accent);
-            pointer-events: none;
         }
         
         .role-option label {
             flex: 1;
             cursor: pointer;
             font-weight: normal;
-            pointer-events: none;
         }
         
         .role-color {
@@ -553,11 +551,7 @@
             <!-- Debug Panel -->
             <details class="debug-panel">
                 <summary>🔍 Debug Info (Click to expand)</summary>
-                <pre>
-Guild ID: {{ guild_id }}
-Roles loaded: {{ roles|length }}
-Permissions from MongoDB: {{ settings.command_perms|tojson }}
-                </pre>
+                <pre id="debugInfo">Loading...</pre>
             </details>
             
             <div class="stats-bar">
@@ -613,7 +607,7 @@ Permissions from MongoDB: {{ settings.command_perms|tojson }}
     </div>
     
     <script>
-        // Constants
+        // Constants from server
         const guildId = {{ guild_id }};
         const roles = {{ roles | tojson }};
         let savedPerms = {{ settings.command_perms | tojson }};
@@ -621,6 +615,12 @@ Permissions from MongoDB: {{ settings.command_perms|tojson }}
         console.log("Guild ID:", guildId);
         console.log("Roles:", roles);
         console.log("Saved permissions:", savedPerms);
+        
+        // Update debug info
+        document.getElementById('debugInfo').textContent = 
+            `Guild ID: ${guildId}\n` +
+            `Roles (${roles.length}): ${roles.map(r => r.name).join(', ')}\n` +
+            `Saved Permissions: ${JSON.stringify(savedPerms, null, 2)}`;
         
         // State
         let currentEditingCommand = null;
@@ -685,7 +685,7 @@ Permissions from MongoDB: {{ settings.command_perms|tojson }}
             "Applications": {
                 emoji: "📝",
                 defaultLevel: "admin",
-                commands: []  // No slash commands, handled by buttons
+                commands: []
             },
             "Staff Utils": {
                 emoji: "👑",
@@ -698,7 +698,6 @@ Permissions from MongoDB: {{ settings.command_perms|tojson }}
             }
         };
         
-        // Helper functions
         function getCommandDefaultLevel(commandName) {
             for (const [cat, data] of Object.entries(categories)) {
                 if (data.commands.includes(commandName)) {
@@ -731,20 +730,11 @@ Permissions from MongoDB: {{ settings.command_perms|tojson }}
             let customizedCount = 0;
             let html = '';
             
-            // Sort categories in a logical order
             const sortedCategories = Object.keys(categories).sort((a, b) => {
                 const order = { 
-                    "Moderation": 1, 
-                    "Giveaways": 2, 
-                    "Sticky": 3, 
-                    "Tickets": 4, 
-                    "Reaction Roles": 5, 
-                    "Welcome": 6, 
-                    "AutoMod": 7, 
-                    "Logging": 8, 
-                    "Autorole": 9, 
-                    "Applications": 10, 
-                    "Staff Utils": 11 
+                    "Moderation": 1, "Giveaways": 2, "Sticky": 3, "Tickets": 4, 
+                    "Reaction Roles": 5, "Welcome": 6, "AutoMod": 7, "Logging": 8, 
+                    "Autorole": 9, "Applications": 10, "Staff Utils": 11 
                 };
                 return (order[a] || 99) - (order[b] || 99);
             });
@@ -755,7 +745,7 @@ Permissions from MongoDB: {{ settings.command_perms|tojson }}
                 
                 totalCommands += commands.length;
                 
-                let categoryHtml = `<div class="category-section" data-category="${category}">
+                html += `<div class="category-section" data-category="${category}">
                     <div class="category-header" onclick="toggleCategory(this)">
                         <div class="category-title">
                             <span class="emoji">${categories[category].emoji}</span>
@@ -774,7 +764,8 @@ Permissions from MongoDB: {{ settings.command_perms|tojson }}
                     const defaultLevel = getCommandDefaultLevel(cmd);
                     const displayRoles = isCustomized ? selectedRoles : [getDefaultLevelLabel(defaultLevel)];
                     
-                    categoryHtml += `
+                    // Use data-command with the original command name (spaces intact)
+                    html += `
                         <div class="command-card" 
                              data-command="${escapeHtml(cmd)}" 
                              data-customized="${isCustomized}" 
@@ -785,12 +776,12 @@ Permissions from MongoDB: {{ settings.command_perms|tojson }}
                                 ${isCustomized ? '<span class="command-badge badge-custom">CUSTOM</span>' : ''}
                             </div>
                             <div class="command-permissions">
-                                <div class="current-perms" id="perms-${escapeHtml(cmd.replace(/\s/g, '-'))}">
+                                <div class="current-perms">
                                     ${displayRoles.map(role => 
                                         `<span class="perm-tag ${isCustomized ? '' : 'perm-tag-default'}">${escapeHtml(role)}</span>`
                                     ).join('')}
                                 </div>
-                                <button class="edit-btn" onclick="event.stopPropagation(); openRoleSelector('${escapeHtml(cmd).replace(/'/g, "\\'")}')">
+                                <button class="edit-btn" onclick="openRoleSelector('${escapeHtml(cmd).replace(/'/g, "\\'")}')">
                                     ✏️ Edit
                                 </button>
                             </div>
@@ -798,8 +789,7 @@ Permissions from MongoDB: {{ settings.command_perms|tojson }}
                     `;
                 }
                 
-                categoryHtml += `</div></div>`;
-                html += categoryHtml;
+                html += `</div></div>`;
             }
             
             container.innerHTML = html;
@@ -810,19 +800,25 @@ Permissions from MongoDB: {{ settings.command_perms|tojson }}
         function toggleCategory(header) {
             header.classList.toggle('collapsed');
             const content = header.nextElementSibling;
-            content.classList.toggle('collapsed');
+            if (content) {
+                content.classList.toggle('collapsed');
+            }
         }
         
         function openRoleSelector(commandName) {
             currentEditingCommand = commandName;
             tempSelectedRoles = [...(savedPerms[commandName] || [])];
             
+            console.log("Opening selector for:", commandName);
+            console.log("Current saved roles:", savedPerms[commandName]);
+            console.log("Temp roles:", tempSelectedRoles);
+            
             document.getElementById('currentCommandName').textContent = `/${commandName}`;
             
             const roleList = document.getElementById('roleList');
             let html = `
-                <div class="role-option" onclick="toggleRoleSelectAll()">
-                    <input type="checkbox" id="selectAll" ${tempSelectedRoles.length === roles.length ? 'checked' : ''}>
+                <div class="role-option" onclick="toggleAllRoles()">
+                    <input type="checkbox" id="selectAllCheckbox" ${tempSelectedRoles.length === roles.length ? 'checked' : ''}>
                     <label><strong>📌 Select All Roles</strong></label>
                 </div>
                 <hr style="margin: 10px 0; border-color: var(--border);">
@@ -831,8 +827,11 @@ Permissions from MongoDB: {{ settings.command_perms|tojson }}
             for (const role of roles) {
                 const isChecked = tempSelectedRoles.includes(role.name);
                 html += `
-                    <div class="role-option" onclick="toggleRole('${escapeHtml(role.name)}')">
-                        <input type="checkbox" id="role-${role.id}" ${isChecked ? 'checked' : ''}>
+                    <div class="role-option" data-role-name="${escapeHtml(role.name)}">
+                        <input type="checkbox" 
+                               id="role-checkbox-${role.id}" 
+                               ${isChecked ? 'checked' : ''}
+                               onclick="event.stopPropagation(); handleRoleCheckboxClick('${escapeHtml(role.name).replace(/'/g, "\\'")}', this.checked)">
                         <div class="role-color" style="background: ${role.color ? '#' + role.color.toString(16).padStart(6, '0') : '#99aab5'}"></div>
                         <label>${escapeHtml(role.name)}</label>
                     </div>
@@ -843,41 +842,44 @@ Permissions from MongoDB: {{ settings.command_perms|tojson }}
             document.getElementById('roleSelector').classList.add('active');
         }
         
-        function toggleRole(roleName) {
-            const index = tempSelectedRoles.indexOf(roleName);
-            if (index === -1) {
-                tempSelectedRoles.push(roleName);
+        function handleRoleCheckboxClick(roleName, isChecked) {
+            if (isChecked) {
+                if (!tempSelectedRoles.includes(roleName)) {
+                    tempSelectedRoles.push(roleName);
+                }
             } else {
-                tempSelectedRoles.splice(index, 1);
-            }
-            
-            // Update checkbox state
-            const role = roles.find(r => r.name === roleName);
-            if (role) {
-                const checkbox = document.getElementById(`role-${role.id}`);
-                if (checkbox) checkbox.checked = index === -1;
+                tempSelectedRoles = tempSelectedRoles.filter(r => r !== roleName);
             }
             
             // Update select all checkbox
-            const selectAll = document.getElementById('selectAll');
-            if (selectAll) selectAll.checked = tempSelectedRoles.length === roles.length;
+            const selectAll = document.getElementById('selectAllCheckbox');
+            if (selectAll) {
+                selectAll.checked = tempSelectedRoles.length === roles.length;
+            }
+            
+            console.log("Updated temp roles:", tempSelectedRoles);
         }
         
-        function toggleRoleSelectAll() {
-            if (tempSelectedRoles.length === roles.length) {
-                tempSelectedRoles = [];
-            } else {
+        function toggleAllRoles() {
+            const selectAll = document.getElementById('selectAllCheckbox');
+            const newState = !selectAll.checked;
+            
+            if (newState) {
                 tempSelectedRoles = roles.map(r => r.name);
+            } else {
+                tempSelectedRoles = [];
             }
             
             // Update all checkboxes
             for (const role of roles) {
-                const checkbox = document.getElementById(`role-${role.id}`);
-                if (checkbox) checkbox.checked = tempSelectedRoles.includes(role.name);
+                const checkbox = document.getElementById(`role-checkbox-${role.id}`);
+                if (checkbox) {
+                    checkbox.checked = newState;
+                }
             }
             
-            const selectAll = document.getElementById('selectAll');
-            if (selectAll) selectAll.checked = tempSelectedRoles.length === roles.length;
+            selectAll.checked = newState;
+            console.log("Toggled all roles:", tempSelectedRoles);
         }
         
         function closeRoleSelector() {
@@ -887,16 +889,27 @@ Permissions from MongoDB: {{ settings.command_perms|tojson }}
         }
         
         async function saveCommandPermissions() {
-            if (!currentEditingCommand) return;
+            if (!currentEditingCommand) {
+                console.error("No command selected for saving");
+                return;
+            }
             
             console.log(`Saving ${currentEditingCommand} with roles:`, tempSelectedRoles);
             
             const formData = new FormData();
             formData.append('form_type', 'save_cmd_perms');
+            // Always include the has_cmd_ field to indicate this command should be processed
             formData.append(`has_cmd_${currentEditingCommand}`, '1');
             
+            // Add each role separately (formData will create multiple entries for the same key)
             for (const role of tempSelectedRoles) {
                 formData.append(`cmd_${currentEditingCommand}`, role);
+            }
+            
+            // If no roles selected, we still want to send the has_cmd_ field
+            // This tells the server to delete the permissions
+            if (tempSelectedRoles.length === 0) {
+                formData.append(`cmd_${currentEditingCommand}`, '');
             }
             
             try {
@@ -906,32 +919,37 @@ Permissions from MongoDB: {{ settings.command_perms|tojson }}
                 });
                 const result = await response.json();
                 
+                console.log("Save response:", result);
+                
                 if (result.success) {
-                    // Update savedPerms
+                    // Update local state immediately
                     if (tempSelectedRoles.length === 0) {
                         delete savedPerms[currentEditingCommand];
                     } else {
-                        savedPerms[currentEditingCommand] = tempSelectedRoles;
+                        savedPerms[currentEditingCommand] = [...tempSelectedRoles];
                     }
                     
-                    // Re-render the entire commands list to reflect changes
+                    // Re-render to reflect changes
                     renderCommands();
+                    
+                    // Update debug info
+                    document.getElementById('debugInfo').textContent = 
+                        `Guild ID: ${guildId}\n` +
+                        `Roles (${roles.length}): ${roles.map(r => r.name).join(', ')}\n` +
+                        `Saved Permissions: ${JSON.stringify(savedPerms, null, 2)}`;
                     
                     showToast(`✅ Saved permissions for /${currentEditingCommand}`, 'success');
                     closeRoleSelector();
                 } else {
-                    showToast(`❌ Failed to save: ${result.error}`, 'error');
+                    showToast(`❌ Failed to save: ${result.error || 'Unknown error'}`, 'error');
                 }
             } catch (error) {
-                console.error('Error:', error);
-                showToast(`❌ Error: ${error.message}`, 'error');
+                console.error('Error saving:', error);
+                showToast(`❌ Network error: ${error.message}`, 'error');
             }
         }
         
         async function saveAllChanges() {
-            // This function collects all current permission states and saves them
-            
-            // Count how many customized commands exist
             let customizedCount = 0;
             for (const [cmd, roles] of Object.entries(savedPerms)) {
                 if (roles.length > 0) customizedCount++;
@@ -963,28 +981,41 @@ Permissions from MongoDB: {{ settings.command_perms|tojson }}
                 });
                 const result = await response.json();
                 
+                console.log("Save all response:", result);
+                
                 if (result.success) {
                     showToast(`✅ Saved ${result.saved.length} command permission(s)!`, 'success');
                 } else {
-                    showToast(`❌ Failed to save: ${result.error}`, 'error');
+                    showToast(`❌ Failed to save: ${result.error || 'Unknown error'}`, 'error');
                 }
             } catch (error) {
-                console.error('Error:', error);
-                showToast(`❌ Error: ${error.message}`, 'error');
+                console.error('Error saving all:', error);
+                showToast(`❌ Network error: ${error.message}`, 'error');
             }
         }
         
         function showToast(message, type = 'success') {
+            // Remove existing toasts
+            const existingToasts = document.querySelectorAll('.toast');
+            existingToasts.forEach(t => t.remove());
+            
             const toast = document.createElement('div');
             toast.className = `toast ${type}`;
             toast.textContent = message;
             document.body.appendChild(toast);
-            setTimeout(() => toast.remove(), 3000);
+            
+            setTimeout(() => {
+                if (toast.parentNode) {
+                    toast.remove();
+                }
+            }, 3000);
         }
         
         function setupFilters() {
             const searchInput = document.getElementById('searchInput');
-            searchInput.addEventListener('input', filterCommands);
+            if (searchInput) {
+                searchInput.addEventListener('input', filterCommands);
+            }
             
             const filterBtns = document.querySelectorAll('.filter-btn');
             filterBtns.forEach(btn => {
@@ -997,8 +1028,9 @@ Permissions from MongoDB: {{ settings.command_perms|tojson }}
         }
         
         function filterCommands() {
-            const searchTerm = document.getElementById('searchInput').value.toLowerCase();
-            const activeFilter = document.querySelector('.filter-btn.active').getAttribute('data-filter');
+            const searchTerm = (document.getElementById('searchInput')?.value || '').toLowerCase();
+            const activeFilterBtn = document.querySelector('.filter-btn.active');
+            const activeFilter = activeFilterBtn ? activeFilterBtn.getAttribute('data-filter') : 'all';
             
             const categorySections = document.querySelectorAll('.category-section');
             
@@ -1007,7 +1039,7 @@ Permissions from MongoDB: {{ settings.command_perms|tojson }}
                 const commandCards = section.querySelectorAll('.command-card');
                 
                 for (const card of commandCards) {
-                    const commandName = card.querySelector('.command-name code')?.textContent || '';
+                    const commandName = (card.querySelector('.command-name code')?.textContent || '').toLowerCase();
                     const isCustomized = card.getAttribute('data-customized') === 'true';
                     const defaultLevel = card.getAttribute('data-default');
                     
@@ -1018,20 +1050,19 @@ Permissions from MongoDB: {{ settings.command_perms|tojson }}
                         case 'staff': matchesFilter = defaultLevel === 'staff'; break;
                         case 'customized': matchesFilter = isCustomized; break;
                         case 'default': matchesFilter = !isCustomized; break;
-                        default: matchesFilter = true;
                     }
                     
-                    const matchesSearch = commandName.toLowerCase().includes(searchTerm);
+                    const matchesSearch = commandName.includes(searchTerm);
                     
                     if (matchesFilter && matchesSearch) {
-                        card.style.display = 'block';
+                        card.style.display = '';
                         hasVisibleCommands = true;
                     } else {
                         card.style.display = 'none';
                     }
                 }
                 
-                section.style.display = hasVisibleCommands ? 'block' : 'none';
+                section.style.display = hasVisibleCommands ? '' : 'none';
             }
         }
         
@@ -1042,9 +1073,18 @@ Permissions from MongoDB: {{ settings.command_perms|tojson }}
             }
         });
         
+        // ESC key to close selector
+        document.addEventListener('keydown', function(e) {
+            if (e.key === 'Escape') {
+                closeRoleSelector();
+            }
+        });
+        
         // Initialize
+        console.log("Initializing...");
         renderCommands();
         setupFilters();
+        console.log("Initialization complete");
     </script>
 </body>
 </html>

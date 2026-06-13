@@ -405,6 +405,7 @@ def commands_dashboard(guild_id):
         if form_type == "save_cmd_perms":
             print("=" * 60)
             print(f"📝 SAVING COMMAND PERMISSIONS for guild {guild_id}")
+            print(f"📝 Form data keys: {list(request.form.keys())}")
             print("=" * 60)
             
             try:
@@ -421,17 +422,19 @@ def commands_dashboard(guild_id):
                         # Clean and validate roles
                         roles = [r.strip() for r in roles if r and r.strip()]
                         
-                        print(f"   Roles to save: {roles}")
+                        print(f"   Raw roles: {request.form.getlist(f'cmd_{command_name}')}")
+                        print(f"   Cleaned roles: {roles}")
                         
                         if roles:
                             # Update or insert the permissions
-                            db["command_perms"].update_one(
+                            result = db["command_perms"].update_one(
                                 {"guild_id": guild_id, "command_name": command_name},
                                 {"$set": {"roles": roles}},
                                 upsert=True
                             )
                             saved_commands.append(command_name)
                             print(f"   ✅ Saved {len(roles)} role(s) for /{command_name}")
+                            print(f"   MongoDB result: matched={result.matched_count}, modified={result.modified_count}, upserted_id={result.upserted_id}")
                             
                             # Verify the save
                             verify = db["command_perms"].find_one({"guild_id": guild_id, "command_name": command_name})
@@ -445,7 +448,13 @@ def commands_dashboard(guild_id):
                             else:
                                 print(f"   ℹ️ No existing permissions for /{command_name}")
                 
-                print(f"\n✅ Processed {saved_commands} commands: {saved_commands}")
+                # Final verification - show all saved permissions for this guild
+                all_saved = list(db["command_perms"].find({"guild_id": guild_id}))
+                print(f"\n📋 FINAL DATABASE STATE for guild {guild_id}:")
+                for doc in all_saved:
+                    print(f"   /{doc['command_name']}: {doc['roles']}")
+                
+                print(f"\n✅ Processed {len(saved_commands)} commands")
                 print("=" * 60)
                 
                 return jsonify({
@@ -458,7 +467,7 @@ def commands_dashboard(guild_id):
                 print(f"❌ Error saving permissions: {e}")
                 import traceback
                 traceback.print_exc()
-                return jsonify({"success": False, "error": str(e)})
+                return jsonify({"success": False, "error": str(e)}), 500
     
     # GET request - display the page
     if not BOT_TOKEN:
@@ -467,18 +476,25 @@ def commands_dashboard(guild_id):
     bot_headers = {"Authorization": f"Bot {BOT_TOKEN}", "User-Agent": "DashboardBot/1.0"}
     
     # Fetch Roles from Discord
-    roles_res = requests.get(f"https://discord.com/api/v10/guilds/{guild_id}/roles", headers=bot_headers)
-    roles = roles_res.json() if roles_res.status_code == 200 else []
-    # Include all roles except @everyone and managed roles
-    roles = [
-        {
-            "id": r["id"],
-            "name": r["name"],
-            "color": r["color"]
-        }
-        for r in roles 
-        if r["name"] != "@everyone" and not r["managed"]
-    ]
+    try:
+        roles_res = requests.get(f"https://discord.com/api/v10/guilds/{guild_id}/roles", headers=bot_headers)
+        if roles_res.status_code == 200:
+            roles = [
+                {
+                    "id": str(r["id"]),
+                    "name": r["name"],
+                    "color": r["color"]
+                }
+                for r in roles_res.json()
+                if r["name"] != "@everyone" and not r["managed"]
+            ]
+            print(f"✅ Fetched {len(roles)} roles for guild {guild_id}")
+        else:
+            print(f"❌ Failed to fetch roles: {roles_res.status_code}")
+            roles = []
+    except Exception as e:
+        print(f"❌ Error fetching roles: {e}")
+        roles = []
     
     # Fetch saved command permissions from MongoDB
     command_perms = {}
@@ -512,7 +528,6 @@ def commands_dashboard(guild_id):
         settings=settings,
         timestamp=datetime.now().timestamp()
     )
-
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.getenv("PORT", 5000)))
