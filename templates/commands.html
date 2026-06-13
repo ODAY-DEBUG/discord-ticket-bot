@@ -6,71 +6,535 @@
     <title>Command Permissions - {{ guild_name }}</title>
     <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
     <style>
-        .commands-container { max-width: 1400px; margin: 0 auto; padding: 20px; }
-        .stats-bar { display: flex; gap: 20px; margin-bottom: 30px; flex-wrap: wrap; }
-        .stat-card { background: var(--bg-card); border: 1px solid var(--border); border-radius: 10px; padding: 15px 25px; flex: 1; min-width: 150px; text-align: center; }
-        .stat-number { font-size: 28px; font-weight: bold; color: var(--accent); }
-        .stat-label { font-size: 12px; color: var(--text-muted); margin-top: 5px; }
-        .category-section { margin-bottom: 30px; background: var(--bg-card); border-radius: 12px; border: 1px solid var(--border); overflow: hidden; }
-        .category-header { background: var(--bg-sidebar); padding: 15px 20px; cursor: pointer; display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid var(--border); }
-        .category-header:hover { background: var(--bg-main); }
-        .category-title { font-size: 18px; font-weight: 600; display: flex; align-items: center; gap: 10px; }
-        .category-title .emoji { font-size: 24px; }
-        .category-count { background: var(--accent); padding: 2px 10px; border-radius: 20px; font-size: 12px; color: white; }
-        .toggle-icon { font-size: 20px; transition: transform 0.2s; }
-        .category-header.collapsed .toggle-icon { transform: rotate(-90deg); }
-        .category-content { display: block; padding: 20px; }
-        .category-content.collapsed { display: none; }
-        .command-card { background: var(--bg-main); border: 1px solid var(--border); border-radius: 10px; margin-bottom: 15px; padding: 15px 20px; }
-        .command-card:hover { border-color: var(--accent); }
-        .command-name { font-family: monospace; font-size: 16px; font-weight: 600; color: var(--accent); margin-bottom: 10px; display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
-        .command-badge { padding: 2px 8px; border-radius: 12px; font-size: 10px; font-weight: 600; }
-        .badge-admin { background: #e74c3c; color: white; }
-        .badge-mod { background: #e67e22; color: white; }
-        .badge-staff { background: #3498db; color: white; }
-        .command-permissions { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; justify-content: space-between; }
-        .current-perms { display: flex; flex-wrap: wrap; gap: 5px; }
-        .perm-tag { background: var(--accent); padding: 4px 10px; border-radius: 15px; font-size: 11px; font-weight: 600; }
-        .perm-tag-default { background: #7f8c8d; }
-        .edit-btn { background: none; border: 1px solid var(--accent); color: var(--accent); padding: 5px 15px; font-size: 12px; cursor: pointer; border-radius: 6px; transition: all 0.2s; }
-        .edit-btn:hover { background: var(--accent); color: white; }
-        .role-selector { display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.7); z-index: 1000; justify-content: center; align-items: center; }
-        .role-selector.active { display: flex; }
-        .role-selector-content { background: var(--bg-card); border-radius: 12px; width: 90%; max-width: 500px; max-height: 80vh; overflow: hidden; border: 1px solid var(--border); }
-        .role-selector-header { padding: 20px; border-bottom: 1px solid var(--border); background: var(--bg-sidebar); }
-        .role-selector-header h3 { margin: 0 0 5px 0; }
-        .role-selector-header p { margin: 0; color: var(--text-muted); font-size: 13px; }
-        .role-list { padding: 15px; max-height: 400px; overflow-y: auto; }
-        .role-option { display: flex; align-items: center; gap: 12px; padding: 12px; border-radius: 8px; cursor: pointer; transition: background 0.2s; margin-bottom: 5px; }
-        .role-option:hover { background: var(--bg-main); }
-        .role-option input { width: 18px; height: 18px; cursor: pointer; accent-color: var(--accent); }
-        .role-option label { flex: 1; cursor: pointer; font-weight: normal; }
-        .role-color { width: 16px; height: 16px; border-radius: 50%; }
-        .role-selector-footer { padding: 15px 20px; border-top: 1px solid var(--border); display: flex; gap: 10px; justify-content: flex-end; }
-        .search-container { margin-bottom: 20px; display: flex; gap: 15px; flex-wrap: wrap; align-items: center; }
-        .search-box { flex: 1; position: relative; }
-        .search-box input { width: 100%; padding: 12px 15px; background: var(--bg-card); border: 1px solid var(--border); border-radius: 8px; color: var(--text-main); }
-        .filter-buttons { display: flex; gap: 10px; flex-wrap: wrap; }
-        .filter-btn { padding: 8px 16px; background: var(--bg-card); border: 1px solid var(--border); border-radius: 8px; cursor: pointer; transition: all 0.2s; }
-        .filter-btn:hover { background: var(--bg-main); }
-        .filter-btn.active { background: var(--accent); border-color: var(--accent); }
-        .action-bar { position: sticky; bottom: 20px; background: var(--bg-card); border: 1px solid var(--border); border-radius: 50px; padding: 12px 25px; display: flex; justify-content: space-between; align-items: center; margin-top: 30px; backdrop-filter: blur(10px); }
-        .save-all-btn { background: #2ecc71; padding: 10px 25px; cursor: pointer; border: none; border-radius: 8px; color: white; font-weight: 600; transition: background 0.2s; }
-        .save-all-btn:hover { background: #27ae60; }
-        .toast { position: fixed; bottom: 30px; right: 30px; background: #2ecc71; color: white; padding: 12px 24px; border-radius: 8px; z-index: 2000; animation: slideIn 0.3s ease; }
-        .toast.error { background: #e74c3c; }
-        .toast.info { background: #3498db; }
-        @keyframes slideIn { from { transform: translateX(100%); opacity: 0; } to { transform: translateX(0); opacity: 1; } }
-        .sidebar { width: 240px; background-color: var(--bg-sidebar); padding: 20px 0; display: flex; flex-direction: column; border-right: 1px solid var(--border); }
-        .sidebar h2 { padding: 0 20px 20px; margin: 0; border-bottom: 1px solid var(--border); color: var(--text-main); font-size: 16px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-        .nav-item { padding: 12px 20px; cursor: pointer; transition: 0.2s; color: var(--text-muted); font-weight: 500; font-size: 14px; border-left: 3px solid transparent; }
-        .nav-item:hover { background-color: var(--bg-main); color: var(--text-main); }
-        .nav-item.active { background-color: var(--bg-main); color: var(--accent); border-left-color: var(--accent); }
-        .content { flex: 1; padding: 40px; overflow-y: auto; }
-        body { margin: 0; background-color: var(--bg-main); color: var(--text-main); display: flex; height: 100vh; overflow: hidden; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; }
-        .debug-panel { background: #1e1f22; padding: 10px 15px; margin-bottom: 20px; border-radius: 8px; font-family: monospace; font-size: 12px; border-left: 3px solid var(--accent); }
-        .debug-panel summary { cursor: pointer; color: var(--accent); }
-        .debug-panel pre { margin: 10px 0 0 0; overflow-x: auto; white-space: pre-wrap; word-wrap: break-word; }
+        :root {
+            --bg-main: #1e1f22;
+            --bg-card: #2b2d31;
+            --bg-sidebar: #313338;
+            --accent: #5865f2;
+            --text-main: #e4e5e7;
+            --text-muted: #949ba4;
+            --border: #404249;
+        }
+        
+        * {
+            box-sizing: border-box;
+        }
+        
+        body {
+            margin: 0;
+            background-color: var(--bg-main);
+            color: var(--text-main);
+            display: flex;
+            height: 100vh;
+            overflow: hidden;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+        }
+        
+        .sidebar {
+            width: 240px;
+            background-color: var(--bg-sidebar);
+            padding: 20px 0;
+            display: flex;
+            flex-direction: column;
+            border-right: 1px solid var(--border);
+            flex-shrink: 0;
+        }
+        
+        .sidebar h2 {
+            padding: 0 20px 20px;
+            margin: 0;
+            border-bottom: 1px solid var(--border);
+            color: var(--text-main);
+            font-size: 16px;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+        
+        .nav-item {
+            padding: 12px 20px;
+            cursor: pointer;
+            transition: 0.2s;
+            color: var(--text-muted);
+            font-weight: 500;
+            font-size: 14px;
+            border-left: 3px solid transparent;
+        }
+        
+        .nav-item:hover {
+            background-color: var(--bg-main);
+            color: var(--text-main);
+        }
+        
+        .nav-item.active {
+            background-color: var(--bg-main);
+            color: var(--accent);
+            border-left-color: var(--accent);
+        }
+        
+        .content {
+            flex: 1;
+            padding: 40px;
+            overflow-y: auto;
+        }
+        
+        .commands-container {
+            max-width: 1400px;
+            margin: 0 auto;
+        }
+        
+        h1 {
+            margin-top: 0;
+            margin-bottom: 10px;
+        }
+        
+        .stats-bar {
+            display: flex;
+            gap: 20px;
+            margin-bottom: 30px;
+            flex-wrap: wrap;
+        }
+        
+        .stat-card {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 10px;
+            padding: 15px 25px;
+            flex: 1;
+            min-width: 150px;
+            text-align: center;
+        }
+        
+        .stat-number {
+            font-size: 28px;
+            font-weight: bold;
+            color: var(--accent);
+        }
+        
+        .stat-label {
+            font-size: 12px;
+            color: var(--text-muted);
+            margin-top: 5px;
+        }
+        
+        .category-section {
+            margin-bottom: 30px;
+            background: var(--bg-card);
+            border-radius: 12px;
+            border: 1px solid var(--border);
+            overflow: hidden;
+        }
+        
+        .category-header {
+            background: var(--bg-sidebar);
+            padding: 15px 20px;
+            cursor: pointer;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            border-bottom: 1px solid var(--border);
+            user-select: none;
+        }
+        
+        .category-header:hover {
+            background: var(--bg-main);
+        }
+        
+        .category-title {
+            font-size: 18px;
+            font-weight: 600;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+        
+        .category-title .emoji {
+            font-size: 24px;
+        }
+        
+        .category-count {
+            background: var(--accent);
+            padding: 2px 10px;
+            border-radius: 20px;
+            font-size: 12px;
+            color: white;
+        }
+        
+        .toggle-icon {
+            font-size: 20px;
+            transition: transform 0.2s;
+        }
+        
+        .category-header.collapsed .toggle-icon {
+            transform: rotate(-90deg);
+        }
+        
+        .category-content {
+            display: block;
+            padding: 20px;
+        }
+        
+        .category-content.collapsed {
+            display: none;
+        }
+        
+        .command-card {
+            background: var(--bg-main);
+            border: 1px solid var(--border);
+            border-radius: 10px;
+            margin-bottom: 15px;
+            padding: 15px 20px;
+            transition: border-color 0.2s;
+        }
+        
+        .command-card:hover {
+            border-color: var(--accent);
+        }
+        
+        .command-name {
+            font-family: 'Courier New', monospace;
+            font-size: 16px;
+            font-weight: 600;
+            color: var(--accent);
+            margin-bottom: 10px;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            flex-wrap: wrap;
+        }
+        
+        .command-badge {
+            padding: 2px 8px;
+            border-radius: 12px;
+            font-size: 10px;
+            font-weight: 600;
+            font-family: 'Segoe UI', sans-serif;
+        }
+        
+        .badge-admin {
+            background: #e74c3c;
+            color: white;
+        }
+        
+        .badge-mod {
+            background: #e67e22;
+            color: white;
+        }
+        
+        .badge-staff {
+            background: #3498db;
+            color: white;
+        }
+        
+        .badge-custom {
+            background: #2ecc71;
+            color: white;
+        }
+        
+        .command-permissions {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 10px;
+            align-items: center;
+            justify-content: space-between;
+        }
+        
+        .current-perms {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 5px;
+        }
+        
+        .perm-tag {
+            background: var(--accent);
+            padding: 4px 10px;
+            border-radius: 15px;
+            font-size: 11px;
+            font-weight: 600;
+        }
+        
+        .perm-tag-default {
+            background: #7f8c8d;
+            color: white;
+        }
+        
+        .edit-btn {
+            background: none;
+            border: 1px solid var(--accent);
+            color: var(--accent);
+            padding: 5px 15px;
+            font-size: 12px;
+            cursor: pointer;
+            border-radius: 6px;
+            transition: all 0.2s;
+            white-space: nowrap;
+        }
+        
+        .edit-btn:hover {
+            background: var(--accent);
+            color: white;
+        }
+        
+        .role-selector {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: rgba(0,0,0,0.7);
+            z-index: 1000;
+            justify-content: center;
+            align-items: center;
+        }
+        
+        .role-selector.active {
+            display: flex;
+        }
+        
+        .role-selector-content {
+            background: var(--bg-card);
+            border-radius: 12px;
+            width: 90%;
+            max-width: 500px;
+            max-height: 80vh;
+            overflow: hidden;
+            border: 1px solid var(--border);
+            display: flex;
+            flex-direction: column;
+        }
+        
+        .role-selector-header {
+            padding: 20px;
+            border-bottom: 1px solid var(--border);
+            background: var(--bg-sidebar);
+        }
+        
+        .role-selector-header h3 {
+            margin: 0 0 5px 0;
+        }
+        
+        .role-selector-header p {
+            margin: 0;
+            color: var(--text-muted);
+            font-size: 13px;
+        }
+        
+        .role-list {
+            padding: 15px;
+            max-height: 400px;
+            overflow-y: auto;
+            flex: 1;
+        }
+        
+        .role-option {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            padding: 12px;
+            border-radius: 8px;
+            cursor: pointer;
+            transition: background 0.2s;
+            margin-bottom: 5px;
+        }
+        
+        .role-option:hover {
+            background: var(--bg-main);
+        }
+        
+        .role-option input[type="checkbox"] {
+            width: 18px;
+            height: 18px;
+            cursor: pointer;
+            accent-color: var(--accent);
+            pointer-events: none;
+        }
+        
+        .role-option label {
+            flex: 1;
+            cursor: pointer;
+            font-weight: normal;
+            pointer-events: none;
+        }
+        
+        .role-color {
+            width: 16px;
+            height: 16px;
+            border-radius: 50%;
+            flex-shrink: 0;
+        }
+        
+        .role-selector-footer {
+            padding: 15px 20px;
+            border-top: 1px solid var(--border);
+            display: flex;
+            gap: 10px;
+            justify-content: flex-end;
+        }
+        
+        .btn-cancel {
+            background: #7f8c8d;
+            padding: 8px 16px;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+            color: white;
+        }
+        
+        .btn-save {
+            background: var(--accent);
+            padding: 8px 16px;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+            color: white;
+        }
+        
+        .search-container {
+            margin-bottom: 20px;
+            display: flex;
+            gap: 15px;
+            flex-wrap: wrap;
+            align-items: center;
+        }
+        
+        .search-box {
+            flex: 1;
+            min-width: 200px;
+        }
+        
+        .search-box input {
+            width: 100%;
+            padding: 12px 15px;
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            color: var(--text-main);
+            font-size: 14px;
+        }
+        
+        .search-box input:focus {
+            outline: none;
+            border-color: var(--accent);
+        }
+        
+        .filter-buttons {
+            display: flex;
+            gap: 10px;
+            flex-wrap: wrap;
+        }
+        
+        .filter-btn {
+            padding: 8px 16px;
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            cursor: pointer;
+            transition: all 0.2s;
+            color: var(--text-main);
+            font-size: 13px;
+        }
+        
+        .filter-btn:hover {
+            background: var(--bg-main);
+        }
+        
+        .filter-btn.active {
+            background: var(--accent);
+            border-color: var(--accent);
+            color: white;
+        }
+        
+        .action-bar {
+            position: sticky;
+            bottom: 20px;
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            padding: 12px 25px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-top: 30px;
+            backdrop-filter: blur(10px);
+            flex-wrap: wrap;
+            gap: 10px;
+        }
+        
+        .save-all-btn {
+            background: #2ecc71;
+            padding: 10px 25px;
+            cursor: pointer;
+            border: none;
+            border-radius: 8px;
+            color: white;
+            font-weight: 600;
+            transition: background 0.2s;
+            font-size: 14px;
+        }
+        
+        .save-all-btn:hover {
+            background: #27ae60;
+        }
+        
+        .toast {
+            position: fixed;
+            bottom: 30px;
+            right: 30px;
+            padding: 12px 24px;
+            border-radius: 8px;
+            z-index: 2000;
+            animation: slideIn 0.3s ease;
+            color: white;
+            font-weight: 500;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+        }
+        
+        .toast.success {
+            background: #2ecc71;
+        }
+        
+        .toast.error {
+            background: #e74c3c;
+        }
+        
+        .toast.info {
+            background: #3498db;
+        }
+        
+        @keyframes slideIn {
+            from {
+                transform: translateX(100%);
+                opacity: 0;
+            }
+            to {
+                transform: translateX(0);
+                opacity: 1;
+            }
+        }
+        
+        .debug-panel {
+            background: #1e1f22;
+            padding: 10px 15px;
+            margin-bottom: 20px;
+            border-radius: 8px;
+            font-family: 'Courier New', monospace;
+            font-size: 12px;
+            border-left: 3px solid var(--accent);
+        }
+        
+        .debug-panel summary {
+            cursor: pointer;
+            color: var(--accent);
+        }
+        
+        .debug-panel pre {
+            margin: 10px 0 0 0;
+            overflow-x: auto;
+            white-space: pre-wrap;
+            word-wrap: break-word;
+            color: #aaa;
+        }
     </style>
 </head>
 <body>
@@ -92,14 +556,23 @@
                 <pre>
 Guild ID: {{ guild_id }}
 Roles loaded: {{ roles|length }}
-Permissions from MongoDB: {{ settings.command_perms|tojson|safe }}
+Permissions from MongoDB: {{ settings.command_perms|tojson }}
                 </pre>
             </details>
             
             <div class="stats-bar">
-                <div class="stat-card"><div class="stat-number" id="totalCommands">0</div><div class="stat-label">Total Commands</div></div>
-                <div class="stat-card"><div class="stat-number" id="customizedCommands">0</div><div class="stat-label">Customized</div></div>
-                <div class="stat-card"><div class="stat-number">{{ roles|length }}</div><div class="stat-label">Available Roles</div></div>
+                <div class="stat-card">
+                    <div class="stat-number" id="totalCommands">0</div>
+                    <div class="stat-label">Total Commands</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-number" id="customizedCommands">0</div>
+                    <div class="stat-label">Customized</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-number">{{ roles|length }}</div>
+                    <div class="stat-label">Available Roles</div>
+                </div>
             </div>
             
             <div class="search-container">
@@ -133,19 +606,23 @@ Permissions from MongoDB: {{ settings.command_perms|tojson|safe }}
             </div>
             <div class="role-list" id="roleList"></div>
             <div class="role-selector-footer">
-                <button onclick="closeRoleSelector()" style="background: #7f8c8d; padding: 8px 16px; border: none; border-radius: 6px; cursor: pointer;">Cancel</button>
-                <button onclick="saveCommandPermissions()" style="background: var(--accent); padding: 8px 16px; border: none; border-radius: 6px; cursor: pointer;">Save</button>
+                <button class="btn-cancel" onclick="closeRoleSelector()">Cancel</button>
+                <button class="btn-save" onclick="saveCommandPermissions()">Save</button>
             </div>
         </div>
     </div>
     
     <script>
+        // Constants
         const guildId = {{ guild_id }};
         const roles = {{ roles | tojson }};
         let savedPerms = {{ settings.command_perms | tojson }};
         
-        console.log("Loaded saved permissions:", savedPerms);
+        console.log("Guild ID:", guildId);
+        console.log("Roles:", roles);
+        console.log("Saved permissions:", savedPerms);
         
+        // State
         let currentEditingCommand = null;
         let tempSelectedRoles = [];
         
@@ -221,6 +698,7 @@ Permissions from MongoDB: {{ settings.command_perms|tojson|safe }}
             }
         };
         
+        // Helper functions
         function getCommandDefaultLevel(commandName) {
             for (const [cat, data] of Object.entries(categories)) {
                 if (data.commands.includes(commandName)) {
@@ -253,8 +731,21 @@ Permissions from MongoDB: {{ settings.command_perms|tojson|safe }}
             let customizedCount = 0;
             let html = '';
             
+            // Sort categories in a logical order
             const sortedCategories = Object.keys(categories).sort((a, b) => {
-                const order = { "Moderation": 1, "Giveaways": 2, "Sticky": 3, "Tickets": 4, "Reaction Roles": 5, "Welcome": 6, "AutoMod": 7, "Logging": 8, "Autorole": 9, "Applications": 10, "Staff Utils": 11 };
+                const order = { 
+                    "Moderation": 1, 
+                    "Giveaways": 2, 
+                    "Sticky": 3, 
+                    "Tickets": 4, 
+                    "Reaction Roles": 5, 
+                    "Welcome": 6, 
+                    "AutoMod": 7, 
+                    "Logging": 8, 
+                    "Autorole": 9, 
+                    "Applications": 10, 
+                    "Staff Utils": 11 
+                };
                 return (order[a] || 99) - (order[b] || 99);
             });
             
@@ -279,21 +770,29 @@ Permissions from MongoDB: {{ settings.command_perms|tojson|safe }}
                     const selectedRoles = savedPerms[cmd] || [];
                     const isCustomized = selectedRoles.length > 0;
                     if (isCustomized) customizedCount++;
+                    
                     const defaultLevel = getCommandDefaultLevel(cmd);
                     const displayRoles = isCustomized ? selectedRoles : [getDefaultLevelLabel(defaultLevel)];
                     
                     categoryHtml += `
-                        <div class="command-card" data-command="${cmd.replace(/ /g, '-')}" data-customized="${isCustomized}" data-default="${defaultLevel}">
+                        <div class="command-card" 
+                             data-command="${escapeHtml(cmd)}" 
+                             data-customized="${isCustomized}" 
+                             data-default="${defaultLevel}">
                             <div class="command-name">
-                                <code>/${cmd}</code>
+                                <code>/${escapeHtml(cmd)}</code>
                                 <span class="command-badge badge-${defaultLevel}">${defaultLevel.toUpperCase()} ONLY</span>
-                                ${isCustomized ? '<span class="command-badge" style="background:#2ecc71;">CUSTOM</span>' : ''}
+                                ${isCustomized ? '<span class="command-badge badge-custom">CUSTOM</span>' : ''}
                             </div>
                             <div class="command-permissions">
-                                <div class="current-perms" id="perms-${cmd.replace(/ /g, '-')}">
-                                    ${displayRoles.map(role => `<span class="perm-tag ${isCustomized ? '' : 'perm-tag-default'}">${escapeHtml(role)}</span>`).join('')}
+                                <div class="current-perms" id="perms-${escapeHtml(cmd.replace(/\s/g, '-'))}">
+                                    ${displayRoles.map(role => 
+                                        `<span class="perm-tag ${isCustomized ? '' : 'perm-tag-default'}">${escapeHtml(role)}</span>`
+                                    ).join('')}
                                 </div>
-                                <button class="edit-btn" onclick="event.stopPropagation(); openRoleSelector('${cmd}', ${JSON.stringify(selectedRoles).replace(/"/g, '&quot;')})">✏️ Edit</button>
+                                <button class="edit-btn" onclick="event.stopPropagation(); openRoleSelector('${escapeHtml(cmd).replace(/'/g, "\\'")}')">
+                                    ✏️ Edit
+                                </button>
                             </div>
                         </div>
                     `;
@@ -314,14 +813,14 @@ Permissions from MongoDB: {{ settings.command_perms|tojson|safe }}
             content.classList.toggle('collapsed');
         }
         
-        function openRoleSelector(commandName, currentRoles) {
+        function openRoleSelector(commandName) {
             currentEditingCommand = commandName;
-            tempSelectedRoles = [...currentRoles];
+            tempSelectedRoles = [...(savedPerms[commandName] || [])];
             
-            document.getElementById('currentCommandName').innerHTML = `<code>/${commandName}</code>`;
+            document.getElementById('currentCommandName').textContent = `/${commandName}`;
             
             const roleList = document.getElementById('roleList');
-            roleList.innerHTML = `
+            let html = `
                 <div class="role-option" onclick="toggleRoleSelectAll()">
                     <input type="checkbox" id="selectAll" ${tempSelectedRoles.length === roles.length ? 'checked' : ''}>
                     <label><strong>📌 Select All Roles</strong></label>
@@ -331,15 +830,16 @@ Permissions from MongoDB: {{ settings.command_perms|tojson|safe }}
             
             for (const role of roles) {
                 const isChecked = tempSelectedRoles.includes(role.name);
-                roleList.innerHTML += `
-                    <div class="role-option" onclick="toggleRole('${role.name.replace(/'/g, "\\'")}')">
-                        <input type="checkbox" id="role-${role.name.replace(/ /g, '-')}" ${isChecked ? 'checked' : ''}>
-                        <div class="role-color" style="background: ${role.color}"></div>
+                html += `
+                    <div class="role-option" onclick="toggleRole('${escapeHtml(role.name)}')">
+                        <input type="checkbox" id="role-${role.id}" ${isChecked ? 'checked' : ''}>
+                        <div class="role-color" style="background: ${role.color ? '#' + role.color.toString(16).padStart(6, '0') : '#99aab5'}"></div>
                         <label>${escapeHtml(role.name)}</label>
                     </div>
                 `;
             }
             
+            roleList.innerHTML = html;
             document.getElementById('roleSelector').classList.add('active');
         }
         
@@ -351,9 +851,14 @@ Permissions from MongoDB: {{ settings.command_perms|tojson|safe }}
                 tempSelectedRoles.splice(index, 1);
             }
             
-            const checkbox = document.getElementById(`role-${roleName.replace(/ /g, '-')}`);
-            if (checkbox) checkbox.checked = index === -1;
+            // Update checkbox state
+            const role = roles.find(r => r.name === roleName);
+            if (role) {
+                const checkbox = document.getElementById(`role-${role.id}`);
+                if (checkbox) checkbox.checked = index === -1;
+            }
             
+            // Update select all checkbox
             const selectAll = document.getElementById('selectAll');
             if (selectAll) selectAll.checked = tempSelectedRoles.length === roles.length;
         }
@@ -361,17 +866,16 @@ Permissions from MongoDB: {{ settings.command_perms|tojson|safe }}
         function toggleRoleSelectAll() {
             if (tempSelectedRoles.length === roles.length) {
                 tempSelectedRoles = [];
-                for (const role of roles) {
-                    const checkbox = document.getElementById(`role-${role.name.replace(/ /g, '-')}`);
-                    if (checkbox) checkbox.checked = false;
-                }
             } else {
                 tempSelectedRoles = roles.map(r => r.name);
-                for (const role of roles) {
-                    const checkbox = document.getElementById(`role-${role.name.replace(/ /g, '-')}`);
-                    if (checkbox) checkbox.checked = true;
-                }
             }
+            
+            // Update all checkboxes
+            for (const role of roles) {
+                const checkbox = document.getElementById(`role-${role.id}`);
+                if (checkbox) checkbox.checked = tempSelectedRoles.includes(role.name);
+            }
+            
             const selectAll = document.getElementById('selectAll');
             if (selectAll) selectAll.checked = tempSelectedRoles.length === roles.length;
         }
@@ -390,12 +894,16 @@ Permissions from MongoDB: {{ settings.command_perms|tojson|safe }}
             const formData = new FormData();
             formData.append('form_type', 'save_cmd_perms');
             formData.append(`has_cmd_${currentEditingCommand}`, '1');
+            
             for (const role of tempSelectedRoles) {
                 formData.append(`cmd_${currentEditingCommand}`, role);
             }
             
             try {
-                const response = await fetch(`/dashboard/${guildId}/commands`, { method: 'POST', body: formData });
+                const response = await fetch(`/dashboard/${guildId}/commands`, { 
+                    method: 'POST', 
+                    body: formData 
+                });
                 const result = await response.json();
                 
                 if (result.success) {
@@ -406,41 +914,8 @@ Permissions from MongoDB: {{ settings.command_perms|tojson|safe }}
                         savedPerms[currentEditingCommand] = tempSelectedRoles;
                     }
                     
-                    // Update UI
-                    const permsDiv = document.getElementById(`perms-${currentEditingCommand.replace(/ /g, '-')}`);
-                    const commandCard = document.querySelector(`.command-card[data-command="${currentEditingCommand.replace(/ /g, '-')}"]`);
-                    const defaultLevel = getCommandDefaultLevel(currentEditingCommand);
-                    
-                    if (tempSelectedRoles.length === 0) {
-                        permsDiv.innerHTML = `<span class="perm-tag perm-tag-default">${getDefaultLevelLabel(defaultLevel)}</span>`;
-                        commandCard.setAttribute('data-customized', 'false');
-                        const customBadge = commandCard.querySelector('.command-badge[style*="#2ecc71"]');
-                        if (customBadge) customBadge.remove();
-                    } else {
-                        permsDiv.innerHTML = tempSelectedRoles.map(role => `<span class="perm-tag">${escapeHtml(role)}</span>`).join('');
-                        commandCard.setAttribute('data-customized', 'true');
-                        let hasCustomBadge = false;
-                        const badges = commandCard.querySelectorAll('.command-badge');
-                        for (const badge of badges) {
-                            if (badge.textContent === 'CUSTOM') hasCustomBadge = true;
-                        }
-                        if (!hasCustomBadge) {
-                            const nameDiv = commandCard.querySelector('.command-name');
-                            const badgeSpan = document.createElement('span');
-                            badgeSpan.className = 'command-badge';
-                            badgeSpan.style.background = '#2ecc71';
-                            badgeSpan.textContent = 'CUSTOM';
-                            nameDiv.appendChild(badgeSpan);
-                        }
-                    }
-                    
-                    // Update stats
-                    let customizedCount = 0;
-                    const cards = document.querySelectorAll('.command-card');
-                    for (const card of cards) {
-                        if (card.getAttribute('data-customized') === 'true') customizedCount++;
-                    }
-                    document.getElementById('customizedCommands').textContent = customizedCount;
+                    // Re-render the entire commands list to reflect changes
+                    renderCommands();
                     
                     showToast(`✅ Saved permissions for /${currentEditingCommand}`, 'success');
                     closeRoleSelector();
@@ -454,38 +929,47 @@ Permissions from MongoDB: {{ settings.command_perms|tojson|safe }}
         }
         
         async function saveAllChanges() {
+            // This function collects all current permission states and saves them
+            
+            // Count how many customized commands exist
+            let customizedCount = 0;
+            for (const [cmd, roles] of Object.entries(savedPerms)) {
+                if (roles.length > 0) customizedCount++;
+            }
+            
+            if (customizedCount === 0) {
+                showToast('No customized commands to save', 'info');
+                return;
+            }
+            
             const formData = new FormData();
             formData.append('form_type', 'save_cmd_perms');
             
-            const commandCards = document.querySelectorAll('.command-card');
-            let savedCount = 0;
-            
-            for (const card of commandCards) {
-                const commandName = card.getAttribute('data-command').replace(/-/g, ' ');
-                const permsDiv = card.querySelector('.current-perms');
-                const roleSpans = permsDiv.querySelectorAll('.perm-tag:not(.perm-tag-default)');
-                const roles = Array.from(roleSpans).map(span => span.textContent);
-                
-                formData.append(`has_cmd_${commandName}`, '1');
-                for (const role of roles) {
-                    formData.append(`cmd_${commandName}`, role);
+            for (const [cmd, roles] of Object.entries(savedPerms)) {
+                if (roles.length > 0) {
+                    formData.append(`has_cmd_${cmd}`, '1');
+                    for (const role of roles) {
+                        formData.append(`cmd_${cmd}`, role);
+                    }
                 }
-                savedCount++;
             }
             
             showToast('💾 Saving all changes...', 'info');
             
             try {
-                const response = await fetch(`/dashboard/${guildId}/commands`, { method: 'POST', body: formData });
+                const response = await fetch(`/dashboard/${guildId}/commands`, { 
+                    method: 'POST', 
+                    body: formData 
+                });
                 const result = await response.json();
                 
                 if (result.success) {
-                    showToast(`✅ Saved ${savedCount} command permission(s)!`, 'success');
-                    setTimeout(() => window.location.reload(), 1000);
+                    showToast(`✅ Saved ${result.saved.length} command permission(s)!`, 'success');
                 } else {
                     showToast(`❌ Failed to save: ${result.error}`, 'error');
                 }
             } catch (error) {
+                console.error('Error:', error);
                 showToast(`❌ Error: ${error.message}`, 'error');
             }
         }
@@ -550,6 +1034,13 @@ Permissions from MongoDB: {{ settings.command_perms|tojson|safe }}
                 section.style.display = hasVisibleCommands ? 'block' : 'none';
             }
         }
+        
+        // Close role selector when clicking outside
+        document.getElementById('roleSelector').addEventListener('click', function(e) {
+            if (e.target === this) {
+                closeRoleSelector();
+            }
+        });
         
         // Initialize
         renderCommands();
