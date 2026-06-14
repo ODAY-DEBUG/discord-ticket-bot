@@ -484,12 +484,21 @@ async def _close_ticket(channel: discord.TextChannel, closed_by: discord.Member,
     
     # 3. Create transcript document for MongoDB
     creator_name = "Unknown"
+    creator_id = None
     category = "Unknown"
     if channel.topic:
         if "Ticket by " in channel.topic:
             creator_name = channel.topic.split("Ticket by ")[1].split(" |")[0]
         if "|" in channel.topic:
             category = channel.topic.split("|")[1].strip() if len(channel.topic.split("|")) > 1 else "Unknown"
+
+    # FIX: resolve creator by stored author_id from messages instead of fragile name lookup
+    creator_member = None
+    for msg_data in messages:
+        if not msg_data["is_bot"] and str(msg_data["author"]).lower().startswith(creator_name.lower()):
+            creator_member = guild.get_member(msg_data["author_id"])
+            if creator_member:
+                break
     
     transcript_doc = {
         "_id": ObjectId(),
@@ -515,18 +524,17 @@ async def _close_ticket(channel: discord.TextChannel, closed_by: discord.Member,
     except Exception as e:
         print(f"❌ Failed to save transcript to MongoDB: {e}")
     
+    # FIX: resolve dashboard URL once and reuse
+    dashboard_url = os.getenv("DASHBOARD_URL", "https://your-domain.com")
+
     # 5. Send to Transcript Channel - ONLY embed with link, NO file
     try:
         cfg = get_guild_config(db, guild.id)
         transcript_channel_id = cfg.get("TRANSCRIPT_CHANNEL_ID")
         
-        # Get dashboard URL from environment
-        dashboard_url = os.getenv("DASHBOARD_URL", "https://your-domain.com")
-        
         if transcript_channel_id:
             t_channel = guild.get_channel(transcript_channel_id)
             if t_channel:
-                # Create a nice embed that STAFF can use - NO file for regular channels
                 t_embed = discord.Embed(
                     title=f"📑 Ticket Closed: {channel.name}",
                     description=f"**Category:** {transcript_doc['category']}\n**Creator:** {transcript_doc['creator_name']}\n**Closed By:** {closed_by.mention}\n**Messages:** {len(messages)}",
@@ -539,58 +547,48 @@ async def _close_ticket(channel: discord.TextChannel, closed_by: discord.Member,
                     inline=False
                 )
                 t_embed.set_footer(text=f"Transcript ID: {transcript_doc['_id']}")
-                
-                # Send just the embed - NO HTML file to public channels
                 await t_channel.send(embed=t_embed)
                 print(f"✅ Transcript link sent to {t_channel.name}")
     except Exception as e:
         print(f"Error sending transcript to channel: {e}")
     
     # 6. Send to Ticket Creator DM - readable summary, NOT an HTML file
-    try:
-        creator_member = guild.get_member_named(creator_name) or discord.utils.get(guild.members, name=creator_name)
-        if creator_member:
-            try:
-                # Create a summary embed for the user
-                dm_embed = discord.Embed(
-                    title=f"📑 Ticket Closed: {channel.name}",
-                    description=f"Your ticket in **{guild.name}** has been closed by {closed_by.mention}.",
-                    color=0x5865F2,
-                    timestamp=datetime.now(timezone.utc)
-                )
+    # FIX: use guild.get_member() with resolved ID instead of deprecated get_member_named()
+    if creator_member:
+        try:
+            dm_embed = discord.Embed(
+                title=f"📑 Ticket Closed: {channel.name}",
+                description=f"Your ticket in **{guild.name}** has been closed by {closed_by.mention}.",
+                color=0x5865F2,
+                timestamp=datetime.now(timezone.utc)
+            )
+            
+            if messages:
+                last_messages = messages[-5:]
+                preview = ""
+                for msg in last_messages:
+                    author_name = msg.get("author", "Unknown")[:20]
+                    content_preview = msg.get("content", "")[:50]
+                    if content_preview:
+                        preview += f"**{author_name}:** {content_preview}\n"
                 
-                # Add message preview (last 5 messages)
-                if messages:
-                    last_messages = messages[-5:]
-                    preview = ""
-                    for msg in last_messages:
-                        author_name = msg.get("author", "Unknown")[:20]
-                        content_preview = msg.get("content", "")[:50]
-                        if content_preview:
-                            preview += f"**{author_name}:** {content_preview}\n"
-                    
-                    if preview:
-                        dm_embed.add_field(name="Last Messages", value=preview[:500], inline=False)
-                
-                dm_embed.add_field(name="Total Messages", value=str(len(messages)), inline=True)
-                dm_embed.add_field(name="Category", value=transcript_doc['category'], inline=True)
-                
-                # Add link to view transcript online
-                dashboard_url = os.getenv("DASHBOARD_URL", "https://your-domain.com")
-                dm_embed.add_field(
-                    name="View Full Transcript", 
-                    value=f"You can view the complete conversation here:\n{dashboard_url}/transcripts/{transcript_doc['_id']}",
-                    inline=False
-                )
-                
-                await creator_member.send(embed=dm_embed)
-                print(f"✅ Transcript summary sent to {creator_member.name}")
-            except discord.Forbidden:
-                print(f"Cannot DM {creator_name} - DMs disabled")
-            except Exception as e:
-                print(f"Error sending DM: {e}")
-    except Exception as e:
-        print(f"Error sending transcript to DM: {e}")
+                if preview:
+                    dm_embed.add_field(name="Last Messages", value=preview[:500], inline=False)
+            
+            dm_embed.add_field(name="Total Messages", value=str(len(messages)), inline=True)
+            dm_embed.add_field(name="Category", value=transcript_doc['category'], inline=True)
+            dm_embed.add_field(
+                name="View Full Transcript", 
+                value=f"You can view the complete conversation here:\n{dashboard_url}/transcripts/{transcript_doc['_id']}",
+                inline=False
+            )
+            
+            await creator_member.send(embed=dm_embed)
+            print(f"✅ Transcript summary sent to {creator_member.name}")
+        except discord.Forbidden:
+            print(f"Cannot DM {creator_name} - DMs disabled")
+        except Exception as e:
+            print(f"Error sending DM: {e}")
     
     # 7. Delete Channel
     try:
@@ -842,8 +840,20 @@ class SupportPanelView(discord.ui.View):
             return
         await interaction.response.send_modal(SupportModal())
 
-    @discord.ui.button(label="⚠️ Report a Scam", style=discord.ButtonStyle.danger, custom_id="sp_scam_v14", row=0)
+    @discord.ui.button(label="⚠️ Report a Scam", style=discord.ButtonStyle.danger, custom_id="sp_scam_support_v14", row=0)
     async def btn_scam(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if await check_existing_ticket(interaction):
+            return
+        await interaction.response.send_modal(ScamModal())
+
+
+class ScamPanelView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=None)
+
+    # FIX: was sp_scam_v14, which clashed with SupportPanelView's scam button
+    @discord.ui.button(label="⚠️ Report a Scam", style=discord.ButtonStyle.danger, custom_id="sp_scam_only_v14")
+    async def btn(self, interaction: discord.Interaction, button: discord.ui.Button):
         if await check_existing_ticket(interaction):
             return
         await interaction.response.send_modal(ScamModal())
@@ -875,6 +885,7 @@ class TicketsBase(commands.Cog):
         bot.add_view(SpawnerPanelView())
         bot.add_view(BuildingPanelView())
         bot.add_view(SupportPanelView())
+        bot.add_view(ScamPanelView())
 
     async def cog_app_command_error(self, interaction: discord.Interaction, error: app_commands.AppCommandError):
         msg = str(error) if isinstance(error, app_commands.CheckFailure) else f"❌ Unexpected error: {error}"
@@ -883,26 +894,89 @@ class TicketsBase(commands.Cog):
         else:
             await interaction.response.send_message(msg, ephemeral=True)
 
-    @app_commands.command(name="ticketpanel", description="Post the full ticket panel (all categories)")
+    @app_commands.command(name="ticketpanel", description="Post a ticket panel for a specific category")
+    @app_commands.describe(category="Select which type of ticket panel to post")
+    @app_commands.choices(category=[
+        app_commands.Choice(name="All Categories (Full Panel)", value="all"),
+        app_commands.Choice(name="🏠 Base Buying", value="basebuying"),
+        app_commands.Choice(name="🕳️ Bedrock Hole", value="bedrock"),
+        app_commands.Choice(name="🔄 Spawner Trade", value="spawner"),
+        app_commands.Choice(name="🏗️ Building", value="building"),
+        app_commands.Choice(name="❓ Support", value="support"),
+        app_commands.Choice(name="⚠️ Scam Report", value="scam"),
+    ])
     @admin_only()
-    async def ticketpanel(self, interaction: discord.Interaction):
+    async def ticketpanel(self, interaction: discord.Interaction, category: app_commands.Choice[str]):
         await _clear_bot_messages(interaction.channel, self.bot.user)
+        
+        # Category configurations
+        panels = {
+            "all": {
+                "title": "🎫 Support Tickets",
+                "description": (
+                    "### Click a button below to open a ticket!\n\n"
+                    "🏠 **Base Buying** — Purchase a base\n"
+                    "🕳️ **Bedrock Hole** — Buy a bedrock hole\n"
+                    "🔄 **Spawner Trade** — Buy or sell spawners\n"
+                    "🏗️ **Building** — Building services\n"
+                    "❓ **Support** — General help\n"
+                    "⚠️ **Scam Report** — Report a scam"
+                ),
+                "color": 0x2b2d31,
+                "view": TicketPanelView()
+            },
+            "basebuying": {
+                "title": "🏠 Base Buying Tickets",
+                "description": "Click the button below to open a ticket for purchasing a base.\n\nA staff member will assist you shortly.",
+                "color": 0x2ecc71,
+                "view": BaseBuyingPanelView()
+            },
+            "bedrock": {
+                "title": "🕳️ Bedrock Hole Tickets",
+                "description": "Click the button below to open a ticket for purchasing a bedrock hole.\n\nA staff member will assist you shortly.",
+                "color": 0x95a5a6,
+                "view": BedrockPanelView()
+            },
+            "spawner": {
+                "title": "🔄 Spawner Trading Tickets",
+                "description": "Click the button below to open a ticket for buying or selling spawners.\n\nA staff member will assist you shortly.",
+                "color": 0xf1c40f,
+                "view": SpawnerPanelView()
+            },
+            "building": {
+                "title": "🏗️ Building Tickets",
+                "description": "Click the button below to open a ticket for building services.\n\nA builder will be assigned to your order.",
+                "color": 0x9b59b6,
+                "view": BuildingPanelView()
+            },
+            "support": {
+                "title": "❓ Support Tickets",
+                "description": "Click the button below to open a ticket for general help and questions.\n\nA staff member will assist you shortly.",
+                "color": 0x3498db,
+                "view": SupportPanelView()
+            },
+            "scam": {
+                "title": "⚠️ Scam Report Tickets",
+                "description": "Click the button below to report a scam.\n\nPlease provide proof in the ticket.",
+                "color": 0xe74c3c,
+                "view": ScamPanelView()
+            }
+        }
+        
+        selected = panels[category.value]
+        
         embed = discord.Embed(
-            title="🎫 Support Tickets",
-            description=(
-                "### Click a button below to open a ticket!\n\n"
-                "🏠 **Base Buying** — Purchase a base\n"
-                "🕳️ **Bedrock Hole** — Buy a bedrock hole\n"
-                "🔄 **Spawner Trade** — Buy or sell spawners\n"
-                "🏗️ **Building** — Building services\n"
-                "❓ **Support** — General help\n"
-                "⚠️ **Scam Report** — Report a scam"
-            ),
-            color=0x2b2d31,
+            title=selected["title"],
+            description=selected["description"],
+            color=selected["color"],
         )
+        
         if interaction.guild.icon:
             embed.set_thumbnail(url=interaction.guild.icon.url)
-        await interaction.response.send_message(embed=embed, view=TicketPanelView())
+        
+        embed.set_footer(text="Your ticket will be created in the appropriate category")
+        
+        await interaction.response.send_message(embed=embed, view=selected["view"])
 
     @app_commands.command(name="close", description="Close the current ticket")
     async def close(self, interaction: discord.Interaction):
