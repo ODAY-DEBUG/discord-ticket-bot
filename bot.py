@@ -52,6 +52,9 @@ class Bot(commands.Bot):
                 print(f"❌ Failed to connect to MongoDB: {e}")
         # ---------------------
 
+        # Bind the global tree error handler
+        self.tree.on_error = self.on_tree_error
+
         for cog in COGS:
             try:
                 await self.load_extension(cog)
@@ -71,7 +74,25 @@ class Bot(commands.Bot):
         
         threading.Thread(target=run_web, daemon=True).start()
 
+    # --- Global Error Handler ---
+    async def on_tree_error(self, interaction: discord.Interaction, error: app_commands.AppCommandError):
+        # Check if the error is our custom permission CheckFailure
+        if isinstance(error, app_commands.CheckFailure):
+            msg = str(error)
+        else:
+            # Print the real traceback to your Railway console for other crashes
+            import traceback
+            traceback.print_exception(type(error), error, error.__traceback__)
+            msg = "❌ An unexpected error occurred while running this command."
 
+        # Safely send the error message to the user
+        try:
+            if interaction.response.is_done():
+                await interaction.followup.send(msg, ephemeral=True)
+            else:
+                await interaction.response.send_message(msg, ephemeral=True)
+        except discord.HTTPException:
+            pass
 bot = Bot(command_prefix='!', intents=intents, help_command=None)
 
 
