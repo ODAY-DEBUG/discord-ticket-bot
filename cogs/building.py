@@ -109,8 +109,9 @@ async def create_build_ticket(interaction: discord.Interaction, build: dict, ign
     }
     db["building_orders"].insert_one(order_doc)
 
-    # Payment embed
-    payment_method = cfg.get("PAYMENT_METHOD", "your payment method")
+    # Payment embed – re-fetch config so dashboard changes are always reflected
+    cfg = get_guild_config(db, guild.id)
+    payment_method = cfg.get("PAYMENT_METHOD") or "your payment method"
     pay_description = f"**Pay {build['price']}** to `{payment_method}`\n\n" \
                       f"**IGN:** {ign}\n**Region:** {region}\n\n" \
                       "After paying, click the **Paid** button."
@@ -141,7 +142,8 @@ class PaymentView(discord.ui.View):
         super().__init__(timeout=None)
         self.buyer_id = buyer_id
         self.channel_id = channel_id
-        self.confirmation_role = confirmation_role
+        # Store the ID so the role can be re-fetched after a bot restart
+        self.confirmation_role_id = confirmation_role.id if confirmation_role else None
 
         paid_btn = discord.ui.Button(label="💰 Paid", style=discord.ButtonStyle.green, custom_id=f"paid_{channel_id}")
         close_btn = discord.ui.Button(label="🔒 Close Ticket", style=discord.ButtonStyle.grey, custom_id=f"close_ticket_{channel_id}")
@@ -157,7 +159,9 @@ class PaymentView(discord.ui.View):
         return True
 
     async def paid_callback(self, interaction: discord.Interaction):
-        confirm_view = ConfirmPaymentView(self.buyer_id, self.channel_id, self.confirmation_role)
+        # Re-fetch role by ID so it works even after a bot restart
+        confirmation_role = interaction.guild.get_role(self.confirmation_role_id) if self.confirmation_role_id else None
+        confirm_view = ConfirmPaymentView(self.buyer_id, self.channel_id, confirmation_role)
         embed = discord.Embed(
             title="🔐 Confirm Payment",
             description=f"{interaction.user.mention} has marked the order as paid.\n"
@@ -167,7 +171,8 @@ class PaymentView(discord.ui.View):
         await interaction.response.edit_message(embed=embed, view=confirm_view)
 
     async def close_callback(self, interaction: discord.Interaction):
-        mention = self.confirmation_role.mention if self.confirmation_role else "@295"
+        confirmation_role = interaction.guild.get_role(self.confirmation_role_id) if self.confirmation_role_id else None
+        mention = confirmation_role.mention if confirmation_role else "@295"
         await interaction.response.send_message(f"{mention} {interaction.user.mention} wants to close this ticket.", ephemeral=False)
 
 
@@ -176,7 +181,8 @@ class ConfirmPaymentView(discord.ui.View):
         super().__init__(timeout=None)
         self.buyer_id = buyer_id
         self.channel_id = channel_id
-        self.confirmation_role = confirmation_role
+        # Store ID so it survives bot restarts
+        self.confirmation_role_id = confirmation_role.id if confirmation_role else None
 
         self.received_btn = discord.ui.Button(label="✅ Received", style=discord.ButtonStyle.green, custom_id=f"confirm_received_{channel_id}")
         self.deny_btn = discord.ui.Button(label="❌ Didn't Receive", style=discord.ButtonStyle.red, custom_id=f"confirm_deny_{channel_id}")
@@ -186,8 +192,9 @@ class ConfirmPaymentView(discord.ui.View):
         self.add_item(self.deny_btn)
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
-        # Only the 295 role (confirmation_role) can confirm payment
-        if self.confirmation_role not in interaction.user.roles and not interaction.user.guild_permissions.administrator:
+        # Re-fetch role by ID so it works after a bot restart
+        confirmation_role = interaction.guild.get_role(self.confirmation_role_id) if self.confirmation_role_id else None
+        if confirmation_role not in interaction.user.roles and not interaction.user.guild_permissions.administrator:
             await interaction.response.send_message("❌ Only the 295 role can confirm payment.", ephemeral=True)
             return False
         return True
@@ -237,7 +244,8 @@ class ConfirmPaymentView(discord.ui.View):
         await interaction.followup.send("✅ Payment confirmed and order sent to builders.", ephemeral=True)
 
     async def deny_callback(self, interaction: discord.Interaction):
-        pay_view = PaymentView(self.buyer_id, self.channel_id, self.confirmation_role)
+        confirmation_role = interaction.guild.get_role(self.confirmation_role_id) if self.confirmation_role_id else None
+        pay_view = PaymentView(self.buyer_id, self.channel_id, confirmation_role)
         embed = discord.Embed(
             title="🧾 Payment Required",
             description="The payment was not received. Please pay and click Paid again.",
