@@ -349,7 +349,7 @@ class Building(commands.Cog):
     @app_commands.command(name="buildpanel", description="Post/update the build ordering panel")
     @admin_only()
     async def buildpanel(self, interaction: discord.Interaction):
-        await interaction.response.defer(ephemeral=False)  # important!
+        await interaction.response.defer(ephemeral=False)
         db = self.bot.db
         panel = db["building_panels"].find_one({"guild_id": interaction.guild.id})
         if not panel or not panel.get("builds"):
@@ -364,13 +364,15 @@ class Building(commands.Cog):
         )
         if interaction.guild.icon:
             embed.set_thumbnail(url=interaction.guild.icon.url)
-        # Clear old bot messages (optional, now safe because we deferred)
-        try:
-            async for msg in interaction.channel.history(limit=20):
-                if msg.author == self.bot.user:
+        # Get the interaction response message (the "thinking..." message)
+        original_msg = await interaction.original_response()
+        # Clear old bot messages, but skip the interaction's own response
+        async for msg in interaction.channel.history(limit=20):
+            if msg.author == self.bot.user and msg.id != original_msg.id:
+                try:
                     await msg.delete()
-        except Exception:
-            pass  # ignore any errors during cleanup
+                except discord.HTTPException:
+                    pass
         view = BuildPanelView(builds)
         await interaction.edit_original_response(content=None, embed=embed, view=view)
 
