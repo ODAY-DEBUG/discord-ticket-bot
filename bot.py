@@ -23,10 +23,9 @@ COGS = [
     'cogs.giveaway',
     'cogs.sticky',
     'cogs.tickets_base',
-    'cogs.tickets_base_buying',
     'cogs.tickets_bedrock',
     'cogs.tickets_spawner',
-    'cogs.tickets_building',
+    'cogs.building',            # new building system
     'cogs.tickets_support',
     'cogs.reactionroles',
     'cogs.welcome',
@@ -34,9 +33,8 @@ COGS = [
     'cogs.logging',
     'cogs.autorole',
     'cogs.applications',
-    'cogs.staff_utils',  # ADD THIS LINE
+    'cogs.staff_utils',
 ]
-
 
 class Bot(commands.Bot):
     async def setup_hook(self):
@@ -50,7 +48,6 @@ class Bot(commands.Bot):
                 print("✅ Successfully connected to MongoDB!")
             except Exception as e:
                 print(f"❌ Failed to connect to MongoDB: {e}")
-        # ---------------------
 
         # Bind the global tree error handler
         self.tree.on_error = self.on_tree_error
@@ -67,25 +64,20 @@ class Bot(commands.Bot):
             port = int(os.getenv("PORT", 5000))
             print(f"🌐 Starting Flask Dashboard on 0.0.0.0:{port}...")
             try:
-                # debug=False and use_reloader=False are CRITICAL when running inside a bot thread
                 flask_app.run(host='0.0.0.0', port=port, debug=False, use_reloader=False)
             except Exception as e:
                 print(f"❌ Flask failed to start: {e}")
-        
+
         threading.Thread(target=run_web, daemon=True).start()
 
     # --- Global Error Handler ---
     async def on_tree_error(self, interaction: discord.Interaction, error: app_commands.AppCommandError):
-        # Check if the error is our custom permission CheckFailure
         if isinstance(error, app_commands.CheckFailure):
             msg = str(error)
         else:
-            # Print the real traceback to your Railway console for other crashes
             import traceback
             traceback.print_exception(type(error), error, error.__traceback__)
             msg = "❌ An unexpected error occurred while running this command."
-
-        # Safely send the error message to the user
         try:
             if interaction.response.is_done():
                 await interaction.followup.send(msg, ephemeral=True)
@@ -93,8 +85,8 @@ class Bot(commands.Bot):
                 await interaction.response.send_message(msg, ephemeral=True)
         except discord.HTTPException:
             pass
-bot = Bot(command_prefix='!', intents=intents, help_command=None)
 
+bot = Bot(command_prefix='!', intents=intents, help_command=None)
 
 @bot.event
 async def on_ready():
@@ -105,33 +97,24 @@ async def on_ready():
     except Exception as e:
         print(f'❌ Global sync failed: {e}')
 
-
-
-
 @bot.command(name='sync')
 @commands.has_permissions(administrator=True)
 async def sync_commands(ctx):
     msg = await ctx.send('🔄 Wiping old commands, reloading cogs, and syncing...')
     try:
-        # Wipe the internal command tree clean
         bot.tree.clear_commands(guild=None)
         bot.tree.clear_commands(guild=ctx.guild)
-        
-        # Reload all cogs so they re-register their commands into the empty tree
         for cog in COGS:
             try:
                 await bot.reload_extension(cog)
                 print(f'✅ Reloaded {cog}')
             except Exception as e:
                 print(f'❌ Reload failed for {cog}: {e}')
-        
-        # Push the freshly rebuilt command list to Discord
         synced = await bot.tree.sync()
         names = ', '.join(f'/{c.name}' for c in synced)
         await msg.edit(content=f"✅ Synced {len(synced)} global command(s):\n{names}")
     except Exception as e:
         await msg.edit(content=f'❌ Sync failed: {e}')
-
 
 @bot.command(name='reload')
 @commands.has_permissions(administrator=True)
@@ -146,28 +129,23 @@ async def reload_cog(ctx, cog: str = ''):
             results.append(f'❌ {c}: {e}')
     await ctx.send('\n'.join(results))
 
-
 @bot.command(name='listcogs')
 @commands.has_permissions(administrator=True)
 async def list_cogs(ctx):
     loaded = list(bot.extensions.keys())
     await ctx.send(f"Loaded cogs: {', '.join(loaded) if loaded else 'None'}")
 
-
 def main():
     token = get_bot_token()
     if not token:
         raise RuntimeError('DISCORD_BOT_TOKEN or DISCORD_TOKEN environment variable is not set.')
-
     async def run_bot():
         async with bot:
             await bot.start(token)
-    
     try:
         asyncio.run(run_bot())
     except KeyboardInterrupt:
         print("Bot stopped by user")
-
 
 if __name__ == '__main__':
     main()

@@ -767,12 +767,6 @@ class TicketPanelView(discord.ui.View):
             return
         await interaction.response.send_modal(SpawnerModal())
 
-    @discord.ui.button(label="🏗️ Building", style=discord.ButtonStyle.primary, custom_id="tp_building_v14", row=1)
-    async def btn_building(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if await check_existing_ticket(interaction):
-            return
-        await interaction.response.send_modal(BuildingModal())
-
     @discord.ui.button(label="❓ Support", style=discord.ButtonStyle.secondary, custom_id="tp_support_v14", row=1)
     async def btn_support(self, interaction: discord.Interaction, button: discord.ui.Button):
         if await check_existing_ticket(interaction):
@@ -784,7 +778,6 @@ class TicketPanelView(discord.ui.View):
         if await check_existing_ticket(interaction):
             return
         await interaction.response.send_modal(ScamModal())
-
 
 class BaseBuyingPanelView(discord.ui.View):
     def __init__(self):

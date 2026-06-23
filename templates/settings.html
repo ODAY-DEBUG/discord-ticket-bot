@@ -47,26 +47,27 @@
 
 <div class="sidebar">
     <h2>{{ guild_name }}</h2>
-    
+
     <div class="nav-category">Server Setup</div>
     <div class="nav-item active" onclick="switchTab('autorole', this)">🤖 Autorole</div>
     <div class="nav-item" onclick="switchTab('welcome', this)">👋 Welcome</div>
     <div class="nav-item" onclick="switchTab('logging', this)">📜 Logging</div>
-    
+
     <div class="nav-category">Moderation</div>
     <div class="nav-item" onclick="switchTab('automod', this)">🛡️ AutoMod</div>
     <div class="nav-item" onclick="switchTab('config', this)">⚙️ Roles & Config</div>
     <div class="nav-item" onclick="window.location.href='/dashboard/{{ guild_id }}/commands'">🔑 Command Permissions</div>
-    
+
     <div class="nav-category">Tickets & Apps</div>
     <div class="nav-item" onclick="switchTab('applications', this)">📝 Applications</div>
 
     <!-- After the Applications nav item, before Announcement -->
     <div class="nav-category">Support</div>
     <div class="nav-item" onclick="window.location.href='/transcripts'">📑 Transcripts</div>
-    
+
     <div class="nav-category">Utility</div>
     <div class="nav-item" onclick="switchTab('announcement', this)">📢 Announcement</div>
+    <div class="nav-item" onclick="switchTab('building', this)">🏗️ Building</div>
 </div>
 
 <div class="content">
@@ -213,7 +214,6 @@
             </form>
         </div>
 
-  
         <!-- APPLICATIONS CARD -->
         <div id="applications" class="card">
             <h3>Applications</h3>
@@ -267,6 +267,96 @@
             </form>
         </div>
 
+        <!-- BUILDING CARD -->
+        <div id="building" class="card">
+            <h3>Building System</h3>
+            <p>Configure builder roles and available builds.</p>
+
+            <!-- Builder Roles -->
+            <form method="POST">
+                <input type="hidden" name="form_type" value="building_config">
+                <div class="form-group">
+                    <label>T1 Builder Role</label>
+                    <select name="BUILDER_T1_ROLE_ID">
+                        <option value="none">None</option>
+                        {% for role in roles|sort(attribute='position', reverse=True) %}
+                        <option value="{{ role.id }}" {% if settings.building and settings.building.config and settings.building.config.BUILDER_T1_ROLE_ID|string == role.id|string %}selected{% endif %}>{{ role.name }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label>T2 Builder Role</label>
+                    <select name="BUILDER_T2_ROLE_ID">
+                        <option value="none">None</option>
+                        {% for role in roles|sort(attribute='position', reverse=True) %}
+                        <option value="{{ role.id }}" {% if settings.building and settings.building.config and settings.building.config.BUILDER_T2_ROLE_ID|string == role.id|string %}selected{% endif %}>{{ role.name }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label>T3 Builder Role</label>
+                    <select name="BUILDER_T3_ROLE_ID">
+                        <option value="none">None</option>
+                        {% for role in roles|sort(attribute='position', reverse=True) %}
+                        <option value="{{ role.id }}" {% if settings.building and settings.building.config and settings.building.config.BUILDER_T3_ROLE_ID|string == role.id|string %}selected{% endif %}>{{ role.name }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <button type="submit">Save Roles</button>
+            </form>
+
+            <hr>
+
+            <!-- Builds List -->
+            <h4>Available Builds</h4>
+            <div id="buildsList">
+                {% for build in (settings.building.builds if settings.building else []) %}
+                <div style="background:var(--input-bg); padding:15px; border-radius:6px; margin-bottom:10px; display:flex; justify-content:space-between; align-items:center;">
+                    <div>
+                        <strong>{{ build.emoji }} {{ build.name }}</strong> — ${{ build.price }}
+                        {% if build.description %}<br><small style="color:var(--text-muted)">{{ build.description }}</small>{% endif %}
+                    </div>
+                    <div>
+                        <button type="button" onclick="editBuild('{{ build.id }}', '{{ build.name }}', {{ build.price }}, '{{ build.description|e }}', '{{ build.emoji }}')" style="background:var(--accent); font-size:12px; padding:5px 10px; margin-right:5px;">Edit</button>
+                        <form method="POST" style="display:inline;" onsubmit="return confirm('Delete this build?')">
+                            <input type="hidden" name="form_type" value="delete_build">
+                            <input type="hidden" name="delete_build_id" value="{{ build.id }}">
+                            <button type="submit" class="danger" style="background:#ed4245; font-size:12px; padding:5px 10px;">Delete</button>
+                        </form>
+                    </div>
+                </div>
+                {% endfor %}
+                {% if not settings.building or not settings.building.builds %}
+                <p style="color:var(--text-muted)">No builds added yet.</p>
+                {% endif %}
+            </div>
+
+            <!-- Add Build Form -->
+            <form method="POST" style="margin-top:20px;">
+                <input type="hidden" name="form_type" value="add_build">
+                <div class="form-group"><label>Build Name</label><input type="text" name="build_name" required></div>
+                <div class="form-group"><label>Price ($)</label><input type="number" name="build_price" required></div>
+                <div class="form-group"><label>Description (optional)</label><input type="text" name="build_desc"></div>
+                <div class="form-group"><label>Emoji (optional)</label><input type="text" name="build_emoji" value="🧱"></div>
+                <button type="submit">Add Build</button>
+            </form>
+
+            <!-- Edit Build Modal (simple inline) -->
+            <div id="editBuildModal" style="display:none; background:var(--bg-card); padding:20px; border-radius:8px; margin-top:20px;">
+                <h4>Edit Build</h4>
+                <form method="POST" id="editBuildForm">
+                    <input type="hidden" name="form_type" value="update_build">
+                    <input type="hidden" name="edit_build_id" id="edit_build_id">
+                    <div class="form-group"><label>Name</label><input type="text" name="build_name" id="edit_build_name" required></div>
+                    <div class="form-group"><label>Price</label><input type="number" name="build_price" id="edit_build_price" required></div>
+                    <div class="form-group"><label>Description</label><input type="text" name="build_desc" id="edit_build_desc"></div>
+                    <div class="form-group"><label>Emoji</label><input type="text" name="build_emoji" id="edit_build_emoji"></div>
+                    <button type="submit">Update Build</button>
+                    <button type="button" onclick="document.getElementById('editBuildModal').style.display='none'" style="background:#7f8c8d;">Cancel</button>
+                </form>
+            </div>
+        </div>
+
     </div>
 </div>
 
@@ -289,6 +379,16 @@
             document.getElementById('app_id').scrollIntoView({ behavior: 'smooth' });
         });
     });
+
+    function editBuild(id, name, price, desc, emoji) {
+        document.getElementById('edit_build_id').value = id;
+        document.getElementById('edit_build_name').value = name;
+        document.getElementById('edit_build_price').value = price;
+        document.getElementById('edit_build_desc').value = desc || '';
+        document.getElementById('edit_build_emoji').value = emoji || '🧱';
+        document.getElementById('editBuildModal').style.display = 'block';
+        document.getElementById('editBuildModal').scrollIntoView({behavior:'smooth'});
+    }
 </script>
 
 </body>
