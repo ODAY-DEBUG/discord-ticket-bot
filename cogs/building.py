@@ -67,8 +67,10 @@ async def create_build_ticket(interaction: discord.Interaction, build: dict, ign
     if not confirmation_role:
         return await interaction.response.send_message("❌ Confirmation role (295) not found. Set BUILD_TICKET_PING_ROLE_ID in the dashboard.", ephemeral=True)
 
-    # T1 Builder role – can see ticket (and claim orders later)
+    # Builder roles – can see ticket and claim orders
     t1_role = guild.get_role(cfg.get("BUILDER_T1_ROLE_ID")) if cfg.get("BUILDER_T1_ROLE_ID") else None
+    t2_role = guild.get_role(cfg.get("BUILDER_T2_ROLE_ID")) if cfg.get("BUILDER_T2_ROLE_ID") else None
+    t3_role = guild.get_role(cfg.get("BUILDER_T3_ROLE_ID")) if cfg.get("BUILDER_T3_ROLE_ID") else None
 
     # Category
     cat = discord.utils.get(guild.categories, name="Building")
@@ -84,6 +86,10 @@ async def create_build_ticket(interaction: discord.Interaction, build: dict, ign
     }
     if t1_role:
         overwrites[t1_role] = discord.PermissionOverwrite(read_messages=True, send_messages=True)
+    if t2_role:
+        overwrites[t2_role] = discord.PermissionOverwrite(read_messages=True, send_messages=True)
+    if t3_role:
+        overwrites[t3_role] = discord.PermissionOverwrite(read_messages=True, send_messages=True)
 
     channel = await guild.create_text_channel(
         name=f"build-{buyer.name.lower()}",
@@ -109,9 +115,9 @@ async def create_build_ticket(interaction: discord.Interaction, build: dict, ign
     }
     db["building_orders"].insert_one(order_doc)
 
-    # Payment embed – re-fetch config so dashboard changes are always reflected
-    cfg = get_guild_config(db, guild.id)
-    payment_method = cfg.get("PAYMENT_METHOD") or "your payment method"
+    # Payment embed – always read directly from DB so dashboard changes reflect immediately
+    fresh_cfg = db["bot_config"].find_one({"guild_id": guild.id}) or {}
+    payment_method = fresh_cfg.get("PAYMENT_METHOD") or "your payment method"
     pay_description = f"**Pay {build['price']}** to `{payment_method}`\n\n" \
                       f"**IGN:** {ign}\n**Region:** {region}\n\n" \
                       "After paying, click the **Paid** button."
@@ -130,6 +136,10 @@ async def create_build_ticket(interaction: discord.Interaction, build: dict, ign
 
     # Ping the 295 role (or configured ping role)
     await channel.send(f"{confirmation_role.mention} A new build ticket has been opened!", delete_after=10)
+
+    # Ping the T3 builder role in the ticket so builders are notified
+    if t3_role:
+        await channel.send(f"{t3_role.mention} New build order! Please review and claim once payment is confirmed.")
 
     await interaction.response.send_message(f"✅ Build ticket created: {channel.mention}", ephemeral=True)
 
