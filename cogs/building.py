@@ -310,11 +310,29 @@ class BuildPanelView(discord.ui.View):
 
 class BuildButton(discord.ui.Button):
     def __init__(self, build: dict):
+        raw_emoji = build.get("emoji", "🧱")
+        # --- Emoji validation ---
+        try:
+            # Try to convert to a proper emoji object
+            if not raw_emoji or not isinstance(raw_emoji, str):
+                emoji = "🧱"      # fallback if missing
+            elif raw_emoji.startswith("<") and raw_emoji.endswith(">"):
+                emoji = discord.PartialEmoji.from_str(raw_emoji)
+            elif len(raw_emoji) == 1:
+                emoji = raw_emoji   # unicode emoji
+            else:
+                # Maybe a custom emoji without brackets? try to build it
+                # If it fails, use default
+                raise ValueError("Invalid emoji format")
+        except Exception:
+            emoji = "🧱"           # safe fallback
+            print(f"⚠️ Invalid emoji for build '{build.get('name')}': {raw_emoji!r} – using default")
+        # ------------------------
         super().__init__(
             label=build["name"],
             style=discord.ButtonStyle.primary,
             custom_id=f"build_{build['id']}",
-            emoji=build.get("emoji", "🧱")
+            emoji=emoji
         )
         self.build = build
 
