@@ -162,13 +162,10 @@ class PaymentView(discord.ui.View):
         self.add_item(paid_btn)
         self.add_item(close_btn)
 
-    async def interaction_check(self, interaction: discord.Interaction) -> bool:
-        if interaction.user.id != self.buyer_id:
-            await interaction.response.send_message("❌ Only the order owner can use this.", ephemeral=True)
-            return False
-        return True
-
     async def paid_callback(self, interaction: discord.Interaction):
+        # Only the buyer can click Paid
+        if interaction.user.id != self.buyer_id:
+            return await interaction.response.send_message("❌ Only the order owner can mark this as paid.", ephemeral=True)
         # Re-fetch role by ID so it works even after a bot restart
         confirmation_role = interaction.guild.get_role(self.confirmation_role_id) if self.confirmation_role_id else None
         confirm_view = ConfirmPaymentView(self.buyer_id, self.channel_id, confirmation_role)
@@ -181,9 +178,22 @@ class PaymentView(discord.ui.View):
         await interaction.response.edit_message(embed=embed, view=confirm_view)
 
     async def close_callback(self, interaction: discord.Interaction):
+        # Ticket owner closing before paying – delete the channel immediately
+        channel = interaction.guild.get_channel(self.channel_id)
+        if not channel:
+            return await interaction.response.send_message("❌ Channel not found.", ephemeral=True)
+        # Allow the buyer OR staff (admin / confirmation role) to close
         confirmation_role = interaction.guild.get_role(self.confirmation_role_id) if self.confirmation_role_id else None
-        mention = confirmation_role.mention if confirmation_role else "@295"
-        await interaction.response.send_message(f"{mention} {interaction.user.mention} wants to close this ticket.", ephemeral=False)
+        is_buyer = interaction.user.id == self.buyer_id
+        is_staff = interaction.user.guild_permissions.administrator or (confirmation_role and confirmation_role in interaction.user.roles)
+        if not is_buyer and not is_staff:
+            return await interaction.response.send_message("❌ Only the ticket owner or staff can close this.", ephemeral=True)
+        await interaction.response.send_message("🔒 Closing ticket...", ephemeral=True)
+        await asyncio.sleep(2)
+        try:
+            await channel.delete(reason=f"Build ticket closed by {interaction.user}")
+        except discord.HTTPException as e:
+            print(f"Failed to delete build ticket channel: {e}")
 
 
 class ConfirmPaymentView(discord.ui.View):
@@ -299,16 +309,18 @@ async def post_order_to_builder_channel(interaction: discord.Interaction, ticket
         {"$set": {"order_message_id": msg.id}}
     )
 
-    # Ping the configured builder ping role (or T3)
-    cfg = get_guild_config(db, guild.id)
-    ping_role_id = cfg.get("BUILD_ORDER_PING_ROLE_ID")
+    # Ping the configured builder ping role (or T3) – read DB directly to bypass cache
+    fresh_cfg = db["bot_config"].find_one({"guild_id": guild.id}) or {}
+    ping_role_id = fresh_cfg.get("BUILD_ORDER_PING_ROLE_ID")
     ping_role = guild.get_role(ping_role_id) if ping_role_id else None
     if not ping_role:
         # Fallback to T3 builder role
-        t3_role_id = cfg.get("BUILDER_T3_ROLE_ID")
+        t3_role_id = fresh_cfg.get("BUILDER_T3_ROLE_ID")
         ping_role = guild.get_role(t3_role_id) if t3_role_id else None
     if ping_role:
-        await orders_channel.send(f"{ping_role.mention} New build order available! ⬆️")   # no delete_after
+        await orders_channel.send(f"{ping_role.mention} New build order available! ⬆️")
+    else:
+        print(f"⚠️ No ping role found for builder-orders in guild {guild.id}")
 
 
 # ---------------------------------------------------------------------------
