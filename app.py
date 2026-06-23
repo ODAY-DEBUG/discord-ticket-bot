@@ -379,10 +379,9 @@ def guild_dashboard(guild_id):
                 }},
                 upsert=True
             )
-
         elif form_type == "add_build":
             build_name = request.form.get("build_name")
-            build_price = request.form.get("build_price")
+            build_price = request.form.get("build_price")          # keep as string
             build_desc = request.form.get("build_desc", "")
             build_emoji = request.form.get("build_emoji", "🧱")
             if build_name and build_price:
@@ -390,34 +389,22 @@ def guild_dashboard(guild_id):
                 new_build = {
                     "id": build_name.lower().replace(" ", "_"),
                     "name": build_name,
-                    "price": int(build_price),
+                    "price": build_price,                          # string
                     "description": build_desc,
                     "emoji": build_emoji
                 }
                 if builds_doc:
-                    # Avoid duplicates by id
-                    if any(b["id"] == new_build["id"] for b in builds_doc.get("builds", [])):
-                        pass  # could flash error
-                    else:
+                    if not any(b["id"] == new_build["id"] for b in builds_doc.get("builds", [])):
                         db["building_panels"].update_one(
                             {"guild_id": guild_id},
                             {"$push": {"builds": new_build}}
                         )
                 else:
                     db["building_panels"].insert_one({"guild_id": guild_id, "builds": [new_build]})
-
-        elif form_type == "delete_build":
-            build_id = request.form.get("delete_build_id")
-            if build_id:
-                db["building_panels"].update_one(
-                    {"guild_id": guild_id},
-                    {"$pull": {"builds": {"id": build_id}}}
-                )
-
         elif form_type == "update_build":
             build_id = request.form.get("edit_build_id")
             build_name = request.form.get("build_name")
-            build_price = request.form.get("build_price")
+            build_price = request.form.get("build_price")          # string
             build_desc = request.form.get("build_desc", "")
             build_emoji = request.form.get("build_emoji", "🧱")
             if build_id and build_name and build_price:
@@ -425,10 +412,17 @@ def guild_dashboard(guild_id):
                     {"guild_id": guild_id, "builds.id": build_id},
                     {"$set": {
                         "builds.$.name": build_name,
-                        "builds.$.price": int(build_price),
+                        "builds.$.price": build_price,
                         "builds.$.description": build_desc,
                         "builds.$.emoji": build_emoji
                     }}
+                )
+        elif form_type == "delete_build":
+            build_id = request.form.get("delete_build_id")
+            if build_id:
+                db["building_panels"].update_one(
+                    {"guild_id": guild_id},
+                    {"$pull": {"builds": {"id": build_id}}}
                 )
 
         elif form_type == "delete_app":
@@ -477,10 +471,10 @@ def guild_dashboard(guild_id):
         )(db["bot_config"].find_one({"guild_id": guild_id}) or {}),
         "applications": list(db["applications_config"].find({"guild_id": guild_id})),
         "command_perms": {doc["command_name"]: doc["roles"] for doc in db["command_perms"].find({"guild_id": guild_id})},
-    	"building": {
-        	"config": db["bot_config"].find_one({"guild_id": guild_id}) or {},
-	        "builds": (db["building_panels"].find_one({"guild_id": guild_id}) or {}).get("builds", [])
-    	},
+        "building": {
+            "config": db["bot_config"].find_one({"guild_id": guild_id}) or {},
+            "builds": (db["building_panels"].find_one({"guild_id": guild_id}) or {}).get("builds", [])
+        },
     }
 
     guild_name = "Unknown Server"
