@@ -270,39 +270,73 @@
         <!-- BUILDING CARD -->
         <div id="building" class="card">
             <h3>Building System</h3>
-            <p>Configure builder roles and available builds.</p>
+            <p>Configure builder roles, pings, payment details, and available builds.</p>
 
-            <!-- Builder Roles -->
+            <!-- Builder Roles & Pings -->
             <form method="POST">
                 <input type="hidden" name="form_type" value="building_config">
+                
                 <div class="form-group">
                     <label>T1 Builder Role</label>
                     <select name="BUILDER_T1_ROLE_ID">
                         <option value="none">None</option>
                         {% for role in roles|sort(attribute='position', reverse=True) %}
-                        <option value="{{ role.id }}" {% if settings.building and settings.building.config and settings.building.config.BUILDER_T1_ROLE_ID|string == role.id|string %}selected{% endif %}>{{ role.name }}</option>
+                        <option value="{{ role.id }}" {% if settings.building.config and settings.building.config.BUILDER_T1_ROLE_ID|string == role.id|string %}selected{% endif %}>{{ role.name }}</option>
                         {% endfor %}
                     </select>
                 </div>
+                
                 <div class="form-group">
                     <label>T2 Builder Role</label>
                     <select name="BUILDER_T2_ROLE_ID">
                         <option value="none">None</option>
-                        {% for role in roles|sort(attribute='position', reverse=True) %}
-                        <option value="{{ role.id }}" {% if settings.building and settings.building.config and settings.building.config.BUILDER_T2_ROLE_ID|string == role.id|string %}selected{% endif %}>{{ role.name }}</option>
+                        {% for role in roles %}
+                        <option value="{{ role.id }}" {% if settings.building.config and settings.building.config.BUILDER_T2_ROLE_ID|string == role.id|string %}selected{% endif %}>{{ role.name }}</option>
                         {% endfor %}
                     </select>
                 </div>
+                
                 <div class="form-group">
                     <label>T3 Builder Role</label>
                     <select name="BUILDER_T3_ROLE_ID">
                         <option value="none">None</option>
-                        {% for role in roles|sort(attribute='position', reverse=True) %}
-                        <option value="{{ role.id }}" {% if settings.building and settings.building.config and settings.building.config.BUILDER_T3_ROLE_ID|string == role.id|string %}selected{% endif %}>{{ role.name }}</option>
+                        {% for role in roles %}
+                        <option value="{{ role.id }}" {% if settings.building.config and settings.building.config.BUILDER_T3_ROLE_ID|string == role.id|string %}selected{% endif %}>{{ role.name }}</option>
                         {% endfor %}
                     </select>
                 </div>
-                <button type="submit">Save Roles</button>
+                
+                <hr>
+                
+                <div class="form-group">
+                    <label>Build Ticket Ping Role (pinged when ticket opened)</label>
+                    <select name="BUILD_TICKET_PING_ROLE_ID">
+                        <option value="none">None</option>
+                        {% for role in roles %}
+                        <option value="{{ role.id }}" {% if settings.building.config and settings.building.config.BUILD_TICKET_PING_ROLE_ID|string == role.id|string %}selected{% endif %}>{{ role.name }}</option>
+                        {% endfor %}
+                    </select>
+                    <span class="helper-text">Role to ping in the ticket channel (e.g., "295").</span>
+                </div>
+                
+                <div class="form-group">
+                    <label>Builder Order Ping Role (pinged in #builder-orders)</label>
+                    <select name="BUILD_ORDER_PING_ROLE_ID">
+                        <option value="none">None (default T3)</option>
+                        {% for role in roles %}
+                        <option value="{{ role.id }}" {% if settings.building.config and settings.building.config.BUILD_ORDER_PING_ROLE_ID|string == role.id|string %}selected{% endif %}>{{ role.name }}</option>
+                        {% endfor %}
+                    </select>
+                    <span class="helper-text">If left empty, the T3 Builder role will be pinged.</span>
+                </div>
+                
+                <div class="form-group">
+                    <label>Payment Method</label>
+                    <input type="text" name="PAYMENT_METHOD" value="{{ settings.building.config.PAYMENT_METHOD if settings.building.config else '' }}" placeholder="e.g., PayPal: owner@mail.com">
+                    <span class="helper-text">Shown in the payment embed when a ticket is opened.</span>
+                </div>
+                
+                <button type="submit">Save Roles & Pings</button>
             </form>
 
             <hr>
@@ -310,7 +344,7 @@
             <!-- Builds List -->
             <h4>Available Builds</h4>
             <div id="buildsList">
-                {% for build in (settings.building.builds if settings.building else []) %}
+                {% for build in settings.building.builds %}
                 <div style="background:var(--input-bg); padding:15px; border-radius:6px; margin-bottom:10px; display:flex; justify-content:space-between; align-items:center;">
                     <div>
                         <strong>{{ build.emoji }} {{ build.name }}</strong> — ${{ build.price }}
@@ -326,7 +360,7 @@
                     </div>
                 </div>
                 {% endfor %}
-                {% if not settings.building or not settings.building.builds %}
+                {% if not settings.building.builds %}
                 <p style="color:var(--text-muted)">No builds added yet.</p>
                 {% endif %}
             </div>
@@ -355,6 +389,18 @@
                     <button type="button" onclick="document.getElementById('editBuildModal').style.display='none'" style="background:#7f8c8d;">Cancel</button>
                 </form>
             </div>
+
+            <script>
+                function editBuild(id, name, price, desc, emoji) {
+                    document.getElementById('edit_build_id').value = id;
+                    document.getElementById('edit_build_name').value = name;
+                    document.getElementById('edit_build_price').value = price;
+                    document.getElementById('edit_build_desc').value = desc || '';
+                    document.getElementById('edit_build_emoji').value = emoji || '🧱';
+                    document.getElementById('editBuildModal').style.display = 'block';
+                    document.getElementById('editBuildModal').scrollIntoView({behavior:'smooth'});
+                }
+            </script>
         </div>
 
     </div>
@@ -379,16 +425,6 @@
             document.getElementById('app_id').scrollIntoView({ behavior: 'smooth' });
         });
     });
-
-    function editBuild(id, name, price, desc, emoji) {
-        document.getElementById('edit_build_id').value = id;
-        document.getElementById('edit_build_name').value = name;
-        document.getElementById('edit_build_price').value = price;
-        document.getElementById('edit_build_desc').value = desc || '';
-        document.getElementById('edit_build_emoji').value = emoji || '🧱';
-        document.getElementById('editBuildModal').style.display = 'block';
-        document.getElementById('editBuildModal').scrollIntoView({behavior:'smooth'});
-    }
 </script>
 
 </body>

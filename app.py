@@ -364,12 +364,18 @@ def guild_dashboard(guild_id):
             t1 = request.form.get("BUILDER_T1_ROLE_ID")
             t2 = request.form.get("BUILDER_T2_ROLE_ID")
             t3 = request.form.get("BUILDER_T3_ROLE_ID")
+            ticket_ping = request.form.get("BUILD_TICKET_PING_ROLE_ID")
+            order_ping = request.form.get("BUILD_ORDER_PING_ROLE_ID")
+            payment_method = request.form.get("PAYMENT_METHOD", "")
             db["bot_config"].update_one(
                 {"guild_id": guild_id},
                 {"$set": {
                     "BUILDER_T1_ROLE_ID": int(t1) if t1 and t1 != "none" else None,
                     "BUILDER_T2_ROLE_ID": int(t2) if t2 and t2 != "none" else None,
                     "BUILDER_T3_ROLE_ID": int(t3) if t3 and t3 != "none" else None,
+                    "BUILD_TICKET_PING_ROLE_ID": int(ticket_ping) if ticket_ping and ticket_ping != "none" else None,
+                    "BUILD_ORDER_PING_ROLE_ID": int(order_ping) if order_ping and order_ping != "none" else None,
+                    "PAYMENT_METHOD": payment_method.strip() if payment_method else ""
                 }},
                 upsert=True
             )
