@@ -52,17 +52,10 @@ async def create_build_ticket(interaction: discord.Interaction, build: dict, ign
     db = interaction.client.db
     cfg = get_guild_config(db, guild.id)
 
-    # The owner role is the STAFF_ROLE from config (used to confirm payment)
+    # Owner role – use whatever role is marked as staff (or a dedicated owner role)
     owner_role = discord.utils.get(guild.roles, name=cfg["STAFF_ROLE"])
     if not owner_role:
         return await interaction.response.send_message("❌ Staff role not found. Please set up roles in the dashboard.", ephemeral=True)
-
-    # Additional staff roles that can see/talk in the ticket (but not confirm payment)
-    staff_roles = []
-    for role_name in (cfg["MOD_ROLE"], cfg["ADMIN_ROLE"]):
-        role = discord.utils.get(guild.roles, name=role_name)
-        if role:
-            staff_roles.append(role)
 
     # Category
     cat = discord.utils.get(guild.categories, name="Building")
@@ -70,15 +63,11 @@ async def create_build_ticket(interaction: discord.Interaction, build: dict, ign
         cat = await guild.create_category("Building")
         await cat.set_permissions(guild.default_role, read_messages=False)
 
-    # Build channel overwrites
     overwrites = {
         guild.default_role: discord.PermissionOverwrite(read_messages=False),
         buyer: discord.PermissionOverwrite(read_messages=True, send_messages=False),  # can see, can't talk
         owner_role: discord.PermissionOverwrite(read_messages=True, send_messages=True)
     }
-    for role in staff_roles:
-        overwrites[role] = discord.PermissionOverwrite(read_messages=True, send_messages=True)
-
     channel = await guild.create_text_channel(
         name=f"build-{buyer.name.lower()}",
         category=cat,
@@ -157,9 +146,11 @@ class PaymentView(discord.ui.View):
         await interaction.response.edit_message(embed=embed, view=confirm_view)
 
     async def close_callback(self, interaction: discord.Interaction):
+        # Buyer can request close – staff must approve via TicketView.
         staff_role = self.owner_role
         mention = staff_role.mention if staff_role else "@Staff"
         await interaction.response.send_message(f"{mention} {interaction.user.mention} wants to close this ticket.", ephemeral=False)
+        # Optionally add a reaction or let TicketView handle it
 
 
 class ConfirmPaymentView(discord.ui.View):
@@ -177,29 +168,35 @@ class ConfirmPaymentView(discord.ui.View):
         self.add_item(self.deny_btn)
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
-        # Only the STAFF_ROLE (owner_role) can confirm payment
+        # Only staff/owner can confirm
         if self.owner_role not in interaction.user.roles and not interaction.user.guild_permissions.administrator:
-            await interaction.response.send_message("❌ Only the owner can confirm payment.", ephemeral=True)
+            await interaction.response.send_message("❌ Only staff can confirm payment.", ephemeral=True)
             return False
         return True
 
     async def received_callback(self, interaction: discord.Interaction):
         channel = interaction.guild.get_channel(self.channel_id)
         if not channel:
-            return await interaction.response.send_message("❌ Channel not found.", ephemeral=True)
-
-        # Unmute buyer
+            return await interaction.response.send_message("❌ Ticket channel not found.", ephemeral=True)
+        # Unmute buyer safely – ensure we only add send_messages, keep read_messages
         buyer = interaction.guild.get_member(self.buyer_id)
         if buyer:
-            await channel.set_permissions(buyer, send_messages=True)
-
-        # Update order in DB
+            current_overwrites = channel.overwrites_for(buyer)
+            current_overwrites.send_messages = True
+            current_overwrites.read_messages = True          # explicitly keep read access
+            try:
+                await channel.set_permissions(buyer, overwrite=current_overwrites)
+            except discord.Forbidden:
+                await interaction.response.send_message("❌ I lack permission to update the buyer.", ephemeral=True)
+                return
+        else:
+            await interaction.response.send_message("⚠️ Buyer is no longer in the server. Continuing...", ephemeral=True)
+        # Update DB
         db = interaction.client.db
         db["building_orders"].update_one(
             {"ticket_channel_id": self.channel_id},
             {"$set": {"status": "confirmed"}}
         )
-
         # Success embed
         success_embed = discord.Embed(
             title="✅ Payment Confirmed",
@@ -207,16 +204,24 @@ class ConfirmPaymentView(discord.ui.View):
             color=0x2ecc71
         )
         await interaction.response.edit_message(embed=success_embed, view=None)
-
-        # Post order to builder-orders channel
-        await post_order_to_builder_channel(interaction, self.channel_id)
+        # Post order to builder-orders channel (safely)
+        try:
+            await post_order_to_builder_channel(interaction, self.channel_id)
+        except Exception as e:
+            # Log the error but don't crash the callback
+            print(f"❌ Error posting to builder-orders: {e}")
+            # Optionally notify the user
+            await interaction.followup.send("⚠️ Order posted, but failed to ping builders. Check the builder-orders channel.", ephemeral=True)
+            return
+        # Optional: confirm to the staff that everything is done
+        await interaction.followup.send("✅ Payment confirmed and order sent to builders.", ephemeral=True)
 
     async def deny_callback(self, interaction: discord.Interaction):
         # Revert to original payment view
         pay_view = PaymentView(self.buyer_id, self.channel_id, self.owner_role)
         embed = discord.Embed(
             title="🧾 Payment Required",
-            description="The payment was not received. Please pay and click Paid again.",
+            description=interaction.message.embeds[0].description.replace("🔐 Confirm Payment", "🧾 Payment Required"),
             color=0xf1c40f
         )
         await interaction.response.edit_message(embed=embed, view=pay_view)
@@ -257,23 +262,12 @@ async def post_order_to_builder_channel(interaction: discord.Interaction, ticket
         {"$set": {"order_message_id": msg.id}}
     )
 
-    # Ping builder roles – especially T3
+    # Ping builder role
     cfg = get_guild_config(db, guild.id)
-    t3_role = guild.get_role(cfg.get("BUILDER_T3_ROLE_ID")) if cfg.get("BUILDER_T3_ROLE_ID") else None
-    t2_role = guild.get_role(cfg.get("BUILDER_T2_ROLE_ID")) if cfg.get("BUILDER_T2_ROLE_ID") else None
-    t1_role = guild.get_role(cfg.get("BUILDER_T1_ROLE_ID")) if cfg.get("BUILDER_T1_ROLE_ID") else None
-
-    mentions = []
-    if t3_role:
-        mentions.append(t3_role.mention)
-    if t2_role:
-        mentions.append(t2_role.mention)
-    if t1_role:
-        mentions.append(t1_role.mention)
-
-    if mentions:
-        ping_msg = f"{' '.join(mentions)} New build order available! ⬆️"
-        await orders_channel.send(ping_msg, delete_after=10)
+    for rid in [cfg.get("BUILDER_T1_ROLE_ID"), cfg.get("BUILDER_T2_ROLE_ID"), cfg.get("BUILDER_T3_ROLE_ID")]:
+        role = guild.get_role(rid)
+        if role:
+            await orders_channel.send(f"{role.mention} New order available! ⬆️", delete_after=5)
 
 
 # ---------------------------------------------------------------------------
@@ -319,7 +313,7 @@ class BuilderClaimView(discord.ui.View):
 
 
 # ---------------------------------------------------------------------------
-# Build Panel View & Button
+# Build Panel View & Command
 # ---------------------------------------------------------------------------
 class BuildPanelView(discord.ui.View):
     def __init__(self, builds: list):
@@ -331,20 +325,23 @@ class BuildPanelView(discord.ui.View):
 class BuildButton(discord.ui.Button):
     def __init__(self, build: dict):
         raw_emoji = build.get("emoji", "🧱")
-        # Emoji validation
+        # --- Emoji validation ---
         try:
+            # Try to convert to a proper emoji object
             if not raw_emoji or not isinstance(raw_emoji, str):
-                emoji = "🧱"
+                emoji = "🧱"      # fallback if missing
             elif raw_emoji.startswith("<") and raw_emoji.endswith(">"):
                 emoji = discord.PartialEmoji.from_str(raw_emoji)
             elif len(raw_emoji) == 1:
-                emoji = raw_emoji
+                emoji = raw_emoji   # unicode emoji
             else:
+                # Maybe a custom emoji without brackets? try to build it
+                # If it fails, use default
                 raise ValueError("Invalid emoji format")
         except Exception:
-            emoji = "🧱"
+            emoji = "🧱"           # safe fallback
             print(f"⚠️ Invalid emoji for build '{build.get('name')}': {raw_emoji!r} – using default")
-
+        # ------------------------
         super().__init__(
             label=build["name"],
             style=discord.ButtonStyle.primary,
@@ -377,6 +374,7 @@ class Building(commands.Cog):
             builds = doc.get("builds", [])
             if builds:
                 view = BuildPanelView(builds)
+                # Store a mapping so we can reference later; Discord requires views be registered
                 self.bot.add_view(view)
                 print(f"✅ Restored build panel view for guild {guild_id}")
 
@@ -384,14 +382,12 @@ class Building(commands.Cog):
     @admin_only()
     async def buildpanel(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=False)
-
         db = self.bot.db
         panel = db["building_panels"].find_one({"guild_id": interaction.guild.id})
         if not panel or not panel.get("builds"):
             return await interaction.edit_original_response(
                 content="❌ No builds configured. Set them up in the dashboard first."
             )
-
         builds = panel["builds"]
         embed = discord.Embed(
             title="🏗️ Build Orders",
@@ -400,16 +396,15 @@ class Building(commands.Cog):
         )
         if interaction.guild.icon:
             embed.set_thumbnail(url=interaction.guild.icon.url)
-
-        # Get the interaction response message to exclude it from deletion
+        # Get the interaction response message (the "thinking..." message)
         original_msg = await interaction.original_response()
+        # Clear old bot messages, but skip the interaction's own response
         async for msg in interaction.channel.history(limit=20):
             if msg.author == self.bot.user and msg.id != original_msg.id:
                 try:
                     await msg.delete()
                 except discord.HTTPException:
                     pass
-
         view = BuildPanelView(builds)
         await interaction.edit_original_response(content=None, embed=embed, view=view)
 
