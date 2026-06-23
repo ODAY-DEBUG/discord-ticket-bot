@@ -349,11 +349,13 @@ class Building(commands.Cog):
     @app_commands.command(name="buildpanel", description="Post/update the build ordering panel")
     @admin_only()
     async def buildpanel(self, interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=False)  # important!
         db = self.bot.db
         panel = db["building_panels"].find_one({"guild_id": interaction.guild.id})
         if not panel or not panel.get("builds"):
-            return await interaction.response.send_message("❌ No builds configured. Set them up in the dashboard first.", ephemeral=True)
-
+            return await interaction.edit_original_response(
+                content="❌ No builds configured. Set them up in the dashboard first."
+            )
         builds = panel["builds"]
         embed = discord.Embed(
             title="🏗️ Build Orders",
@@ -362,17 +364,15 @@ class Building(commands.Cog):
         )
         if interaction.guild.icon:
             embed.set_thumbnail(url=interaction.guild.icon.url)
-
-        # Clear old bot messages in the channel (optional)
-        async for msg in interaction.channel.history(limit=20):
-            if msg.author == self.bot.user:
-                try:
+        # Clear old bot messages (optional, now safe because we deferred)
+        try:
+            async for msg in interaction.channel.history(limit=20):
+                if msg.author == self.bot.user:
                     await msg.delete()
-                except:
-                    pass
-
+        except Exception:
+            pass  # ignore any errors during cleanup
         view = BuildPanelView(builds)
-        await interaction.response.send_message(embed=embed, view=view)
+        await interaction.edit_original_response(content=None, embed=embed, view=view)
 
     # ------------------------------------------------------------------
     # T1 auto-access listener
