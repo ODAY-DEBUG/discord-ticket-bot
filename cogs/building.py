@@ -419,10 +419,7 @@ class Building(commands.Cog):
     async def restore_panel_views(self):
         for doc in self.bot.db["building_panels"].find():
             guild_id = doc["guild_id"]
-            builds = doc.get("builds", [])
-            view = BuildPanelView(builds)
-            self.bot.add_view(view)
-            print(f"✅ Restored build panel view for guild {guild_id}")
+            print(f"✅ Found build panel for guild {guild_id}")
 
         # Fix 2: Re-register PaymentView and ConfirmPaymentView for all open orders
         # so their buttons survive restarts
