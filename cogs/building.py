@@ -421,6 +421,27 @@ class Building(commands.Cog):
                 self.bot.add_view(view)
                 print(f"✅ Restored build panel view for guild {guild_id}")
 
+        # Re-apply Trusted Staff and T1 Builder permissions to all existing build ticket channels
+        for guild in self.bot.guilds:
+            cfg = self.bot.db["bot_config"].find_one({"guild_id": guild.id}) or {}
+            trusted_staff_name = cfg.get("TRUSTED_STAFF_ROLE")
+            trusted_staff = discord.utils.get(guild.roles, name=trusted_staff_name) if trusted_staff_name else None
+            t1_role = guild.get_role(cfg.get("BUILDER_T1_ROLE_ID")) if cfg.get("BUILDER_T1_ROLE_ID") else None
+
+            for channel in guild.text_channels:
+                if not channel.name.startswith("build-"):
+                    continue
+                try:
+                    if trusted_staff:
+                        await channel.set_permissions(trusted_staff, read_messages=True, send_messages=True)
+                    if t1_role:
+                        await channel.set_permissions(t1_role, read_messages=True, send_messages=True)
+                except discord.Forbidden:
+                    print(f"⚠️ No permission to update overwrites in {channel.name}")
+                except Exception as e:
+                    print(f"⚠️ Failed to update {channel.name}: {e}")
+        print("✅ Re-applied Trusted Staff and T1 Builder permissions to existing build tickets")
+
     @app_commands.command(name="buildpanel", description="Post/update the build ordering panel")
     @admin_only()
     async def buildpanel(self, interaction: discord.Interaction):
@@ -455,20 +476,25 @@ class Building(commands.Cog):
 
     @commands.Cog.listener()
     async def on_member_update(self, before: discord.Member, after: discord.Member):
-        cfg = get_guild_config(self.bot.db, after.guild.id)
+        cfg = self.bot.db["bot_config"].find_one({"guild_id": after.guild.id}) or {}
+
         t1_role_id = cfg.get("BUILDER_T1_ROLE_ID")
-        if not t1_role_id:
-            return
-        t1_role = after.guild.get_role(t1_role_id)
-        if not t1_role:
-            return
-        if t1_role in after.roles and t1_role not in before.roles:
+        t1_role = after.guild.get_role(t1_role_id) if t1_role_id else None
+
+        trusted_staff_name = cfg.get("TRUSTED_STAFF_ROLE")
+        trusted_staff = discord.utils.get(after.guild.roles, name=trusted_staff_name) if trusted_staff_name else None
+
+        # If user just received T1 Builder or Trusted Staff role, grant access to all build tickets
+        gained_t1 = t1_role and t1_role in after.roles and t1_role not in before.roles
+        gained_trusted = trusted_staff and trusted_staff in after.roles and trusted_staff not in before.roles
+
+        if gained_t1 or gained_trusted:
             for ch in after.guild.text_channels:
                 if ch.name.startswith("build-"):
                     try:
                         await ch.set_permissions(after, read_messages=True, send_messages=True)
                     except Exception as e:
-                        print(f"Failed to add T1 to {ch.name}: {e}")
+                        print(f"Failed to grant build ticket access to {after.name} in {ch.name}: {e}")
 
 
 async def setup(bot: commands.Bot):
