@@ -722,12 +722,24 @@ class TicketView(discord.ui.View):
     @discord.ui.button(label="Request Close", style=discord.ButtonStyle.grey, custom_id="req_close_v14")
     async def request_close_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
         creator_name = get_creator_name(interaction.channel)
-        if interaction.user.name.lower() != creator_name:
+        cfg = get_guild_config(interaction.client.db, interaction.guild.id)
+
+        # Check if user is the ticket creator (match by name or display_name, case-insensitive)
+        user_name = interaction.user.name.lower()
+        user_display = interaction.user.display_name.lower()
+        is_creator = (user_name == creator_name or user_display == creator_name
+                      or interaction.channel.name.endswith(f"-{user_name}")
+                      or interaction.channel.name.endswith(f"-{user_display}"))
+
+        # Also allow staff and admins to request close
+        staff_role = discord.utils.get(interaction.guild.roles, name=cfg["STAFF_ROLE"])
+        is_staff = interaction.user.guild_permissions.administrator or (staff_role and staff_role in interaction.user.roles)
+
+        if not is_creator and not is_staff:
             await interaction.response.send_message("❌ Only the ticket creator can request a close.", ephemeral=True)
             return
-        staff_role_name = get_guild_config(interaction.client.db, interaction.guild.id)["STAFF_ROLE"]
-        staff_role = discord.utils.get(interaction.guild.roles, name=staff_role_name)
-        mention = staff_role.mention if staff_role else f"@{staff_role_name}"
+
+        mention = staff_role.mention if staff_role else f"@{cfg['STAFF_ROLE']}"
         await interaction.response.send_message(f"{mention}\n**{interaction.user.mention}** has requested to close this ticket.")
 
     @discord.ui.button(label="Close Ticket", style=discord.ButtonStyle.red, custom_id="close_v14")
