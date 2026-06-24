@@ -405,6 +405,15 @@ class Building(commands.Cog):
     # Fix 1: Use cog_load instead of registering on_ready inside __init__
     # to avoid duplicate listeners on cog reload
     async def cog_load(self):
+        # restore_panel_views needs the bot to be ready and db to be set.
+        # Schedule it to run after on_ready fires instead of running it immediately.
+        self.bot.loop.create_task(self._restore_when_ready())
+
+    async def _restore_when_ready(self):
+        await self.bot.wait_until_ready()
+        if not hasattr(self.bot, 'db') or self.bot.db is None:
+            print("❌ Building cog: db not available, skipping view restore")
+            return
         await self.restore_panel_views()
 
     async def restore_panel_views(self):
