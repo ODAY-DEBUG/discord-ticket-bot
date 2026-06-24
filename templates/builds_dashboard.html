@@ -107,7 +107,7 @@
             border-radius: 10px;
             padding: 18px 22px;
             display: grid;
-            grid-template-columns: auto 1fr auto auto;
+            grid-template-columns: auto 1fr auto auto auto;
             align-items: center;
             gap: 16px;
             transition: border-color 0.2s;
@@ -146,6 +146,75 @@
             color: var(--green);
             white-space: nowrap;
         }
+
+        /* Delete button */
+        .delete-btn {
+            background: none;
+            border: 1px solid rgba(231,76,60,0.3);
+            color: rgba(231,76,60,0.6);
+            width: 30px;
+            height: 30px;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 14px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            transition: 0.2s;
+            flex-shrink: 0;
+        }
+        .delete-btn:hover { background: rgba(231,76,60,0.15); border-color: var(--red); color: var(--red); }
+
+        /* Confirm modal */
+        .modal-overlay {
+            display: none;
+            position: fixed; inset: 0;
+            background: rgba(0,0,0,0.6);
+            z-index: 1000;
+            align-items: center;
+            justify-content: center;
+        }
+        .modal-overlay.open { display: flex; }
+        .modal {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            padding: 30px;
+            max-width: 420px;
+            width: 90%;
+            box-shadow: 0 8px 32px rgba(0,0,0,0.4);
+        }
+        .modal h3 { font-size: 18px; margin-bottom: 10px; }
+        .modal p { color: var(--text-muted); font-size: 14px; margin-bottom: 24px; line-height: 1.5; }
+        .modal-order-name {
+            color: var(--text-main);
+            font-weight: 600;
+        }
+        .modal-actions { display: flex; gap: 10px; justify-content: flex-end; }
+        .btn-cancel-modal {
+            padding: 9px 20px;
+            background: none;
+            border: 1px solid var(--border);
+            color: var(--text-muted);
+            border-radius: 8px;
+            cursor: pointer;
+            font-size: 14px;
+            transition: 0.2s;
+        }
+        .btn-cancel-modal:hover { border-color: var(--text-muted); color: var(--text-main); }
+        .btn-confirm-delete {
+            padding: 9px 20px;
+            background: var(--red);
+            border: none;
+            color: white;
+            border-radius: 8px;
+            cursor: pointer;
+            font-size: 14px;
+            font-weight: 600;
+            transition: 0.2s;
+        }
+        .btn-confirm-delete:hover { background: #c0392b; }
+        .btn-confirm-delete:disabled { opacity: 0.5; cursor: not-allowed; }
 
         /* Filter bar */
         .filter-bar { display: flex; gap: 10px; margin-bottom: 20px; flex-wrap: wrap; align-items: center; }
@@ -259,7 +328,7 @@
         @keyframes slideIn { from { transform: translateX(100%); opacity: 0; } to { transform: translateX(0); opacity: 1; } }
 
         @media (max-width: 768px) {
-            .order-card { grid-template-columns: auto 1fr; }
+            .order-card { grid-template-columns: auto 1fr auto; }
             .order-price, .status-badge { grid-column: 2; }
             .builder-card { grid-template-columns: 40px 1fr; }
             .builder-stat { display: none; }
@@ -334,6 +403,8 @@
                     </div>
                     <span class="status-badge badge-{{ order.status }}">{{ order.status }}</span>
                     <div class="order-price">{{ order.price }}</div>
+                    <button class="delete-btn" title="Delete order"
+                            onclick="confirmDelete('{{ order._id }}', '{{ order.build_name }} — {{ order.buyer_name }}', this)">🗑️</button>
                 </div>
                 {% endfor %}
             {% else %}
@@ -387,6 +458,8 @@
                     </div>
                     <span class="status-badge badge-{{ order.status }}">{{ order.status }}</span>
                     <div class="order-price">{{ order.price }}</div>
+                    <button class="delete-btn" title="Delete order"
+                            onclick="confirmDelete('{{ order._id }}', '{{ order.build_name }} — {{ order.buyer_name }}', this)">🗑️</button>
                 </div>
                 {% endfor %}
             {% else %}
@@ -483,6 +556,18 @@
     </div>
 </div>
 
+<!-- ===== DELETE CONFIRM MODAL ===== -->
+<div class="modal-overlay" id="deleteModal">
+    <div class="modal">
+        <h3>🗑️ Delete Order</h3>
+        <p>Are you sure you want to permanently delete <span class="modal-order-name" id="modalOrderName"></span>? This cannot be undone.</p>
+        <div class="modal-actions">
+            <button class="btn-cancel-modal" onclick="closeModal()">Cancel</button>
+            <button class="btn-confirm-delete" id="confirmDeleteBtn" onclick="doDelete()">Delete</button>
+        </div>
+    </div>
+</div>
+
 <script>
     function switchTab(name, btn) {
         document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
@@ -526,6 +611,66 @@
     function toggleBuilderHistory(idx) {
         const el = document.getElementById('bhistory-' + idx);
         el.classList.toggle('open');
+    }
+
+    // ---- Delete logic ----
+    let pendingDeleteId = null;
+    let pendingDeleteCard = null;
+
+    function confirmDelete(orderId, orderName, btn) {
+        pendingDeleteId = orderId;
+        pendingDeleteCard = btn.closest('.order-card');
+        document.getElementById('modalOrderName').textContent = orderName;
+        document.getElementById('deleteModal').classList.add('open');
+    }
+
+    function closeModal() {
+        document.getElementById('deleteModal').classList.remove('open');
+        pendingDeleteId = null;
+        pendingDeleteCard = null;
+    }
+
+    async function doDelete() {
+        if (!pendingDeleteId) return;
+        const btn = document.getElementById('confirmDeleteBtn');
+        btn.disabled = true;
+        btn.textContent = 'Deleting...';
+
+        try {
+            const res = await fetch(`/dashboard/{{ guild_id }}/builds/delete`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ order_id: pendingDeleteId })
+            });
+            const data = await res.json();
+            if (res.ok && data.success) {
+                pendingDeleteCard.style.transition = 'opacity 0.3s';
+                pendingDeleteCard.style.opacity = '0';
+                setTimeout(() => pendingDeleteCard.remove(), 300);
+                showToast('Order deleted.', 'success');
+            } else {
+                showToast(data.error || 'Failed to delete.', 'error');
+            }
+        } catch (e) {
+            showToast('Network error.', 'error');
+        }
+
+        btn.disabled = false;
+        btn.textContent = 'Delete';
+        closeModal();
+    }
+
+    // Close modal on overlay click
+    document.getElementById('deleteModal').addEventListener('click', function(e) {
+        if (e.target === this) closeModal();
+    });
+
+    function showToast(msg, type) {
+        const t = document.createElement('div');
+        t.className = `toast ${type}`;
+        t.textContent = msg;
+        document.body.appendChild(t);
+        setTimeout(() => t.remove(), 3000);
     }
 
     // Auto-refresh active orders every 30s

@@ -800,6 +800,36 @@ def builds_dashboard(guild_id):
         cancelled_orders=cancelled_orders,
         builder_stats=builder_stats,
     )
+@app.route("/dashboard/<int:guild_id>/builds/delete", methods=["POST"])
+def delete_build_order(guild_id):
+    if "access_token" not in session:
+        return jsonify({"success": False, "error": "Unauthorized"}), 401
+
+    if db is None:
+        return jsonify({"success": False, "error": "Database unavailable"}), 500
+
+    guilds = session.get("guilds", [])
+    if not any(int(g["id"]) == guild_id for g in guilds):
+        return jsonify({"success": False, "error": "Forbidden"}), 403
+
+    data = request.get_json()
+    order_id = data.get("order_id") if data else None
+    if not order_id:
+        return jsonify({"success": False, "error": "Missing order_id"}), 400
+
+    try:
+        result = db["building_orders"].delete_one({
+            "_id": ObjectId(order_id),
+            "guild_id": guild_id
+        })
+        if result.deleted_count == 0:
+            return jsonify({"success": False, "error": "Order not found"}), 404
+        return jsonify({"success": True})
+    except Exception as e:
+        logger.error(f"[DELETE_ORDER] {e}", exc_info=True)
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
 @app.route("/test-mongodb")
 def test_mongodb_route():
     """Diagnostic endpoint to test MongoDB connection."""
