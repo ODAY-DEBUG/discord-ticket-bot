@@ -34,6 +34,7 @@ COGS = [
     'cogs.autorole',
     'cogs.applications',
     'cogs.staff_utils',
+    'cogs.afk',
 ]
 
 class Bot(commands.Bot):
