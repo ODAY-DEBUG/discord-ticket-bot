@@ -119,10 +119,17 @@ async def generate_html_transcript(channel: discord.TextChannel, messages: list,
     creator_name = "Unknown"
     category = "Unknown"
     if channel.topic:
-        if "Ticket by " in channel.topic:
-            creator_name = channel.topic.split("Ticket by ")[1].split(" |")[0]
-        if "|" in channel.topic:
-            category = channel.topic.split("|")[1].strip() if len(channel.topic.split("|")) > 1 else "Unknown"
+        topic = channel.topic
+        if "Ticket by " in topic:
+            # Standard ticket format: "Ticket by username | Category"
+            creator_name = topic.split("Ticket by ")[1].split(" |")[0].strip()
+            if "|" in topic:
+                category = topic.split("|")[1].strip()
+        elif "Buyer: " in topic:
+            # Build ticket format: "Build: name | Buyer: username | IGN: ... | Region: ..."
+            creator_name = topic.split("Buyer: ")[1].split(" |")[0].strip()
+            if "Build: " in topic:
+                category = "Build: " + topic.split("Build: ")[1].split(" |")[0].strip()
     
     # Process messages for HTML
     processed_messages = []
@@ -487,10 +494,17 @@ async def _close_ticket(channel: discord.TextChannel, closed_by: discord.Member,
     creator_id = None
     category = "Unknown"
     if channel.topic:
-        if "Ticket by " in channel.topic:
-            creator_name = channel.topic.split("Ticket by ")[1].split(" |")[0]
-        if "|" in channel.topic:
-            category = channel.topic.split("|")[1].strip() if len(channel.topic.split("|")) > 1 else "Unknown"
+        topic = channel.topic
+        if "Ticket by " in topic:
+            # Standard ticket format: "Ticket by username | Category"
+            creator_name = topic.split("Ticket by ")[1].split(" |")[0].strip()
+            if "|" in topic:
+                category = topic.split("|")[1].strip()
+        elif "Buyer: " in topic:
+            # Build ticket format: "Build: name | Buyer: username | IGN: ... | Region: ..."
+            creator_name = topic.split("Buyer: ")[1].split(" |")[0].strip()
+            if "Build: " in topic:
+                category = "Build: " + topic.split("Build: ")[1].split(" |")[0].strip()
 
     # FIX: resolve creator by stored author_id from messages instead of fragile name lookup
     creator_member = None
