@@ -11,11 +11,10 @@ import asyncio
 # ---------------------------------------------------------------------------
 def is_builder(interaction: discord.Interaction) -> bool:
     cfg = get_guild_config(interaction.client.db, interaction.guild.id)
-    t1 = interaction.guild.get_role(cfg.get("BUILDER_T1_ROLE_ID"))
-    t2 = interaction.guild.get_role(cfg.get("BUILDER_T2_ROLE_ID"))
-    t3 = interaction.guild.get_role(cfg.get("BUILDER_T3_ROLE_ID"))
-    for role in (t1, t2, t3):
-        if role and role in interaction.user.roles:
+    user_role_ids = {r.id for r in interaction.user.roles}
+    for key in ("BUILDER_T1_ROLE_ID", "BUILDER_T2_ROLE_ID", "BUILDER_T3_ROLE_ID"):
+        raw = cfg.get(key)
+        if raw and int(raw) in user_role_ids:
             return True
     return interaction.user.guild_permissions.administrator
 
