@@ -683,6 +683,123 @@ def commands_dashboard(guild_id):
     )
 
 
+## ─────────────────────────────────────────────────────────────────────────
+## ADD THIS ROUTE TO app.py  (paste after the commands_dashboard route)
+## ─────────────────────────────────────────────────────────────────────────
+
+@app.route("/dashboard/<int:guild_id>/builds")
+def builds_dashboard(guild_id):
+    """Build tracker: active orders + builder stats."""
+    if "access_token" not in session:
+        return redirect("/")
+
+    if db is None:
+        return "<h1>Error: Database connection not available!</h1>", 500
+
+    # ── Permission: must be a guild manager ──────────────────────────────
+    guilds = session.get("guilds", [])
+    if not any(int(g["id"]) == guild_id for g in guilds):
+        abort(403)
+
+    guild_name = next((g["name"] for g in guilds if int(g["id"]) == guild_id), "Unknown Server")
+
+    # ── Fetch all orders for this guild ──────────────────────────────────
+    all_orders = list(db["building_orders"].find({"guild_id": guild_id}))
+
+    # Resolve Discord usernames via bot token (best-effort, cached per request)
+    user_cache = {}
+    bot_headers = {"Authorization": f"Bot {BOT_TOKEN}", "User-Agent": "DashboardBot/1.0"}
+
+    def resolve_user(user_id):
+        if not user_id:
+            return "Unknown"
+        if user_id in user_cache:
+            return user_cache[user_id]
+        try:
+            r = requests.get(
+                f"https://discord.com/api/v10/users/{user_id}",
+                headers=bot_headers,
+                timeout=3
+            )
+            name = r.json().get("username", str(user_id)) if r.status_code == 200 else str(user_id)
+        except Exception:
+            name = str(user_id)
+        user_cache[user_id] = name
+        return name
+
+    def fmt_order(order):
+        created = order.get("created_at")
+        created_str = created.strftime("%d %b %Y, %H:%M") if created else "Unknown"
+        return {
+            "build_name": order.get("build_name", "Unknown"),
+            "buyer_name": resolve_user(order.get("buyer_id")),
+            "builder_name": resolve_user(order.get("builder_id")) if order.get("builder_id") else None,
+            "ign": order.get("ign", "—"),
+            "region": order.get("region", "—"),
+            "farm_name": order.get("farm_name", "—"),
+            "price": order.get("price", "—"),
+            "status": order.get("status", "unknown"),
+            "created_at": created_str,
+        }
+
+    active_statuses = {"unpaid", "confirmed", "claimed"}
+    active_orders   = [fmt_order(o) for o in all_orders if o.get("status") in active_statuses]
+    completed_orders = [fmt_order(o) for o in all_orders if o.get("status") == "completed"]
+    cancelled_orders = [fmt_order(o) for o in all_orders if o.get("status") == "cancelled"]
+
+    # ── Builder stats ─────────────────────────────────────────────────────
+    # Group all orders that were ever claimed/completed/cancelled by builder_id
+    builder_map = {}  # builder_id -> { name, orders: [], completed, active, cancelled, first_build }
+
+    for order in all_orders:
+        bid = order.get("builder_id")
+        if not bid:
+            continue
+
+        if bid not in builder_map:
+            builder_map[bid] = {
+                "name": resolve_user(bid),
+                "orders": [],
+                "completed": 0,
+                "active": 0,
+                "cancelled": 0,
+                "first_build_dt": order.get("created_at"),
+            }
+
+        status = order.get("status", "")
+        builder_map[bid]["orders"].append(fmt_order(order))
+
+        if status == "completed":
+            builder_map[bid]["completed"] += 1
+        elif status in ("claimed", "confirmed"):
+            builder_map[bid]["active"] += 1
+        elif status == "cancelled":
+            builder_map[bid]["cancelled"] += 1
+
+        # Track earliest order date
+        dt = order.get("created_at")
+        if dt and (builder_map[bid]["first_build_dt"] is None or dt < builder_map[bid]["first_build_dt"]):
+            builder_map[bid]["first_build_dt"] = dt
+
+    builder_stats = []
+    for data in builder_map.values():
+        dt = data["first_build_dt"]
+        data["first_build"] = dt.strftime("%d %b %Y") if dt else "Unknown"
+        del data["first_build_dt"]
+        builder_stats.append(data)
+
+    # Sort by completed desc, then active desc
+    builder_stats.sort(key=lambda b: (b["completed"], b["active"]), reverse=True)
+
+    return render_template(
+        "builds_dashboard.html",
+        guild_id=guild_id,
+        guild_name=guild_name,
+        active_orders=active_orders,
+        completed_orders=completed_orders,
+        cancelled_orders=cancelled_orders,
+        builder_stats=builder_stats,
+    )
 @app.route("/test-mongodb")
 def test_mongodb_route():
     """Diagnostic endpoint to test MongoDB connection."""
