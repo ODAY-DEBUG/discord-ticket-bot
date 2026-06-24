@@ -731,6 +731,7 @@ def builds_dashboard(guild_id):
         created = order.get("created_at")
         created_str = created.strftime("%d %b %Y, %H:%M") if created else "Unknown"
         return {
+            "_id": str(order.get("_id", "")),
             "build_name": order.get("build_name", "Unknown"),
             "buyer_name": resolve_user(order.get("buyer_id")),
             "builder_name": resolve_user(order.get("builder_id")) if order.get("builder_id") else None,
