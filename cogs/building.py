@@ -19,6 +19,25 @@ def is_builder(interaction: discord.Interaction) -> bool:
             return True
     return interaction.user.guild_permissions.administrator
 
+# ---------------------------------------------------------------------------
+# Helper: Dashboard command permissions checker
+# ---------------------------------------------------------------------------
+def has_cmd_perm(interaction: discord.Interaction, command_name: str) -> bool:
+    """Checks if the user has permission based on the dashboard config."""
+    if interaction.user.guild_permissions.administrator:
+        return True
+    
+    db = interaction.client.db
+    doc = db["command_perms"].find_one({"guild_id": interaction.guild.id, "command_name": command_name})
+    
+    if not doc or not doc.get("roles"):
+        return False # If not configured in dashboard, default to no permission (secure by default)
+        
+    allowed_roles = doc["roles"]
+    for role in interaction.user.roles:
+        if role.name in allowed_roles:
+            return True
+    return False
 
 # ---------------------------------------------------------------------------
 # Modals
@@ -29,50 +48,52 @@ class BuildOrderModal(discord.ui.Modal, title="Place a Build Order"):
         self.build = build
         self.add_item(discord.ui.TextInput(label="Your IGN", custom_id="ign", required=True))
         self.add_item(discord.ui.TextInput(label="Region (e.g. EU, NA, ASIA)", custom_id="region", required=True))
+        self.add_item(discord.ui.TextInput(label="Farm Name", custom_id="farm_name", required=True, style=discord.TextStyle.paragraph))
 
     async def on_submit(self, interaction: discord.Interaction):
         ign = self.children[0].value.strip()
         region = self.children[1].value.strip()
+        farm_name = self.children[2].value.strip()
 
-        # Check for existing build ticket
-        for ch in interaction.guild.text_channels:
-            if ch.name.endswith(f"-{interaction.user.name.lower()}") and ch.name.startswith("build-"):
-                await interaction.response.send_message(f"❌ You already have an open build ticket: {ch.mention}", ephemeral=True)
-                return
+        # Check for existing build ticket via DB (much faster than channel iteration)
+        db = interaction.client.db
+        existing = db["building_orders"].find_one({
+            "guild_id": interaction.guild.id,
+            "buyer_id": interaction.user.id,
+            "status": {"$in": ["unpaid", "confirmed", "claimed"]}
+        })
+        if existing:
+            ch = interaction.guild.get_channel(existing["ticket_channel_id"])
+            return await interaction.response.send_message(f"❌ You already have an open build ticket: {ch.mention if ch else 'Unknown'}", ephemeral=True)
 
-        await create_build_ticket(interaction, self.build, ign, region)
+        await create_build_ticket(interaction, self.build, ign, region, farm_name)
 
 
 # ---------------------------------------------------------------------------
 # Ticket creation flow
 # ---------------------------------------------------------------------------
-async def create_build_ticket(interaction: discord.Interaction, build: dict, ign: str, region: str):
+async def create_build_ticket(interaction: discord.Interaction, build: dict, ign: str, region: str, farm_name: str):
     guild = interaction.guild
     buyer = interaction.user
     db = interaction.client.db
     cfg = get_guild_config(db, guild.id)
 
-    # Trusted Staff role – can see the ticket but NOT confirm payment
-    trusted_staff_name = cfg["TRUSTED_STAFF_ROLE"]
-    trusted_staff = discord.utils.get(guild.roles, name=trusted_staff_name)
+    trusted_staff_name = cfg.get("TRUSTED_STAFF_ROLE")
+    trusted_staff = discord.utils.get(guild.roles, name=trusted_staff_name) if trusted_staff_name else None
     if not trusted_staff:
         return await interaction.response.send_message("❌ Trusted Staff role not found. Check your dashboard config.", ephemeral=True)
 
-    # The 295 role – can confirm payment (and also see the ticket)
     confirmation_role_id = cfg.get("BUILD_TICKET_PING_ROLE_ID")
     confirmation_role = guild.get_role(confirmation_role_id) if confirmation_role_id else None
     if not confirmation_role:
-        # Fallback to a role named "295"
         confirmation_role = discord.utils.get(guild.roles, name="295")
     if not confirmation_role:
         return await interaction.response.send_message("❌ Confirmation role (295) not found. Set BUILD_TICKET_PING_ROLE_ID in the dashboard.", ephemeral=True)
 
-    # Builder roles – can see ticket and claim orders
     t1_role = guild.get_role(cfg.get("BUILDER_T1_ROLE_ID")) if cfg.get("BUILDER_T1_ROLE_ID") else None
     t2_role = guild.get_role(cfg.get("BUILDER_T2_ROLE_ID")) if cfg.get("BUILDER_T2_ROLE_ID") else None
     t3_role = guild.get_role(cfg.get("BUILDER_T3_ROLE_ID")) if cfg.get("BUILDER_T3_ROLE_ID") else None
 
-    # Category
     cat = discord.utils.get(guild.categories, name="Building")
     if not cat:
         cat = await guild.create_category("Building")
@@ -80,46 +101,44 @@ async def create_build_ticket(interaction: discord.Interaction, build: dict, ign
 
     overwrites = {
         guild.default_role: discord.PermissionOverwrite(read_messages=False),
-        buyer: discord.PermissionOverwrite(read_messages=True, send_messages=False),  # read-only
+        buyer: discord.PermissionOverwrite(read_messages=True, send_messages=False),
         trusted_staff: discord.PermissionOverwrite(read_messages=True, send_messages=True),
         confirmation_role: discord.PermissionOverwrite(read_messages=True, send_messages=True)
     }
-    if t1_role:
-        overwrites[t1_role] = discord.PermissionOverwrite(read_messages=True, send_messages=True)
-    if t2_role:
-        overwrites[t2_role] = discord.PermissionOverwrite(read_messages=True, send_messages=True)
-    if t3_role:
-        overwrites[t3_role] = discord.PermissionOverwrite(read_messages=True, send_messages=True)
+    if t1_role: overwrites[t1_role] = discord.PermissionOverwrite(read_messages=True, send_messages=True)
+    if t2_role: overwrites[t2_role] = discord.PermissionOverwrite(read_messages=True, send_messages=True)
+    if t3_role: overwrites[t3_role] = discord.PermissionOverwrite(read_messages=True, send_messages=True)
 
     channel = await guild.create_text_channel(
         name=f"build-{buyer.name.lower()}",
         category=cat,
         overwrites=overwrites,
-        topic=f"Build: {build['name']} | Buyer: {buyer.name} | IGN: {ign} | Region: {region}"
+        topic=f"Build: {build['name']} | Buyer: {buyer.name} | IGN: {ign} | Region: {region} | Farm: {farm_name}"
     )
 
-    # Save order to DB (price is now a string)
     order_doc = {
         "guild_id": guild.id,
         "ticket_channel_id": channel.id,
         "buyer_id": buyer.id,
         "ign": ign,
         "region": region,
+        "farm_name": farm_name,
         "build_id": build["id"],
         "build_name": build["name"],
-        "price": build["price"],          # string
+        "price": build["price"],
         "status": "unpaid",
         "builder_id": None,
         "order_message_id": None,
+        "notes": [],
         "created_at": datetime.now(timezone.utc)
     }
     db["building_orders"].insert_one(order_doc)
 
-    # Payment embed – always read directly from DB so dashboard changes reflect immediately
     fresh_cfg = db["bot_config"].find_one({"guild_id": guild.id}) or {}
     payment_method = fresh_cfg.get("PAYMENT_METHOD") or "your payment method"
+    
     pay_description = f"**Pay {build['price']}** to `{payment_method}`\n\n" \
-                      f"**IGN:** {ign}\n**Region:** {region}\n\n" \
+                      f"**IGN:** {ign}\n**Region:** {region}\n**Farm Name:** {farm_name}\n\n" \
                       "After paying, click the **Paid** button."
     pay_embed = discord.Embed(
         title=f"🧾 Payment Required – {build['name']}",
@@ -127,17 +146,14 @@ async def create_build_ticket(interaction: discord.Interaction, build: dict, ign
         color=0xf1c40f
     )
     pay_embed.set_footer(text=f"Order ID: {channel.id}")
-    view = PaymentView(buyer.id, channel.id, confirmation_role)  # <-- pass the 295 role
+    
+    view = PaymentView(buyer.id, channel.id, confirmation_role)
     await channel.send(embed=pay_embed, view=view)
 
-    # Add the standard close button view
     close_view = TicketView()
     await channel.send("\n**Staff Controls**", view=close_view)
 
-    # Ping the 295 role (or configured ping role)
     await channel.send(f"{confirmation_role.mention} A new build ticket has been opened!", delete_after=10)
-
-    # Ping the T3 builder role in the ticket so builders are notified
     if t3_role:
         await channel.send(f"{t3_role.mention} New build order! Please review and claim once payment is confirmed.")
 
@@ -152,7 +168,6 @@ class PaymentView(discord.ui.View):
         super().__init__(timeout=None)
         self.buyer_id = buyer_id
         self.channel_id = channel_id
-        # Store the ID so the role can be re-fetched after a bot restart
         self.confirmation_role_id = confirmation_role.id if confirmation_role else None
 
         paid_btn = discord.ui.Button(label="💰 Paid", style=discord.ButtonStyle.green, custom_id=f"paid_{channel_id}")
@@ -163,26 +178,21 @@ class PaymentView(discord.ui.View):
         self.add_item(close_btn)
 
     async def paid_callback(self, interaction: discord.Interaction):
-        # Only the buyer can click Paid
         if interaction.user.id != self.buyer_id:
             return await interaction.response.send_message("❌ Only the order owner can mark this as paid.", ephemeral=True)
-        # Re-fetch role by ID so it works even after a bot restart
         confirmation_role = interaction.guild.get_role(self.confirmation_role_id) if self.confirmation_role_id else None
         confirm_view = ConfirmPaymentView(self.buyer_id, self.channel_id, confirmation_role)
         embed = discord.Embed(
             title="🔐 Confirm Payment",
-            description=f"{interaction.user.mention} has marked the order as paid.\n"
-                        "Click **Received** if payment arrived, or **Didn't Receive** to go back.",
+            description=f"{interaction.user.mention} has marked the order as paid.\nClick **Received** if payment arrived, or **Didn't Receive** to go back.",
             color=0x3498db
         )
         await interaction.response.edit_message(embed=embed, view=confirm_view)
 
     async def close_callback(self, interaction: discord.Interaction):
-        # Ticket owner closing before paying – delete the channel immediately
         channel = interaction.guild.get_channel(self.channel_id)
         if not channel:
             return await interaction.response.send_message("❌ Channel not found.", ephemeral=True)
-        # Allow the buyer OR staff (admin / confirmation role) to close
         confirmation_role = interaction.guild.get_role(self.confirmation_role_id) if self.confirmation_role_id else None
         is_buyer = interaction.user.id == self.buyer_id
         is_staff = interaction.user.guild_permissions.administrator or (confirmation_role and confirmation_role in interaction.user.roles)
@@ -201,7 +211,6 @@ class ConfirmPaymentView(discord.ui.View):
         super().__init__(timeout=None)
         self.buyer_id = buyer_id
         self.channel_id = channel_id
-        # Store ID so it survives bot restarts
         self.confirmation_role_id = confirmation_role.id if confirmation_role else None
 
         self.received_btn = discord.ui.Button(label="✅ Received", style=discord.ButtonStyle.green, custom_id=f"confirm_received_{channel_id}")
@@ -212,7 +221,6 @@ class ConfirmPaymentView(discord.ui.View):
         self.add_item(self.deny_btn)
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
-        # Re-fetch role by ID so it works after a bot restart
         confirmation_role = interaction.guild.get_role(self.confirmation_role_id) if self.confirmation_role_id else None
         if confirmation_role not in interaction.user.roles and not interaction.user.guild_permissions.administrator:
             await interaction.response.send_message("❌ Only the 295 role can confirm payment.", ephemeral=True)
@@ -224,7 +232,6 @@ class ConfirmPaymentView(discord.ui.View):
         if not channel:
             return await interaction.response.send_message("❌ Ticket channel not found.", ephemeral=True)
 
-        # Unmute buyer safely
         buyer = interaction.guild.get_member(self.buyer_id)
         if buyer:
             current_overwrites = channel.overwrites_for(buyer)
@@ -233,44 +240,28 @@ class ConfirmPaymentView(discord.ui.View):
             try:
                 await channel.set_permissions(buyer, overwrite=current_overwrites)
             except discord.Forbidden:
-                await interaction.response.send_message("❌ I lack permission to update the buyer.", ephemeral=True)
-                return
-        else:
-            await interaction.response.send_message("⚠️ Buyer is no longer in the server. Continuing...", ephemeral=True)
+                return await interaction.response.send_message("❌ I lack permission to update the buyer.", ephemeral=True)
 
-        # Update DB
         db = interaction.client.db
-        db["building_orders"].update_one(
-            {"ticket_channel_id": self.channel_id},
-            {"$set": {"status": "confirmed"}}
-        )
+        db["building_orders"].update_one({"ticket_channel_id": self.channel_id}, {"$set": {"status": "confirmed"}})
 
-        # Success embed
-        success_embed = discord.Embed(
-            title="✅ Payment Confirmed",
-            description="The buyer can now talk. Please proceed with the build.",
-            color=0x2ecc71
-        )
+        success_embed = discord.Embed(title="✅ Payment Confirmed", description="The buyer can now talk. Please proceed with the build.", color=0x2ecc71)
         await interaction.response.edit_message(embed=success_embed, view=None)
 
-        # Post order to builder-orders channel
         try:
             await post_order_to_builder_channel(interaction, self.channel_id)
         except Exception as e:
             print(f"❌ Error posting to builder-orders: {e}")
-            await interaction.followup.send("⚠️ Order posted, but failed to ping builders.", ephemeral=True)
-            return
-
-        await interaction.followup.send("✅ Payment confirmed and order sent to builders.", ephemeral=True)
 
     async def deny_callback(self, interaction: discord.Interaction):
         confirmation_role = interaction.guild.get_role(self.confirmation_role_id) if self.confirmation_role_id else None
         pay_view = PaymentView(self.buyer_id, self.channel_id, confirmation_role)
-        embed = discord.Embed(
-            title="🧾 Payment Required",
-            description="The payment was not received. Please pay and click Paid again.",
-            color=0xf1c40f
-        )
+        
+        db = interaction.client.db
+        order = db["building_orders"].find_one({"ticket_channel_id": self.channel_id})
+        price = order["price"] if order else "Unknown"
+        
+        embed = discord.Embed(title="🧾 Payment Required", description=f"The payment was not received. Please pay `{price}` and click Paid again.", color=0xf1c40f)
         await interaction.response.edit_message(embed=embed, view=pay_view)
 
 
@@ -281,46 +272,33 @@ async def post_order_to_builder_channel(interaction: discord.Interaction, ticket
     guild = interaction.guild
     db = interaction.client.db
     order = db["building_orders"].find_one({"ticket_channel_id": ticket_channel_id})
-    if not order:
-        return
+    if not order: return
 
     orders_channel_id = get_guild_config(db, guild.id).get("BUILDER_ORDERS_CHANNEL_ID")
-    if not orders_channel_id:
-        return
+    if not orders_channel_id: return
 
     orders_channel = guild.get_channel(orders_channel_id)
-    if not orders_channel:
-        return
+    if not orders_channel: return
 
-    embed = discord.Embed(
-        title=f"🛠️ New Build Order – {order['build_name']}",
-        color=0xf39c12,
-        timestamp=datetime.now(timezone.utc)
-    )
+    embed = discord.Embed(title=f"🛠️ New Build Order – {order['build_name']}", color=0xf39c12, timestamp=datetime.now(timezone.utc))
     embed.add_field(name="IGN", value=order["ign"], inline=True)
     embed.add_field(name="Region", value=order["region"], inline=True)
-    embed.add_field(name="Price", value=order["price"], inline=True)   # already string
+    embed.add_field(name="Farm Name", value=order.get("farm_name", "N/A"), inline=True)
+    embed.add_field(name="Price", value=order["price"], inline=True)
     embed.set_footer(text=f"Ticket: {guild.get_channel(ticket_channel_id).name}")
 
     view = BuilderClaimView(order)
     msg = await orders_channel.send(embed=embed, view=view)
-    db["building_orders"].update_one(
-        {"ticket_channel_id": ticket_channel_id},
-        {"$set": {"order_message_id": msg.id}}
-    )
+    db["building_orders"].update_one({"ticket_channel_id": ticket_channel_id}, {"$set": {"order_message_id": msg.id}})
 
-    # Ping the configured builder ping role (or T3) – read DB directly to bypass cache
     fresh_cfg = db["bot_config"].find_one({"guild_id": guild.id}) or {}
     ping_role_id = fresh_cfg.get("BUILD_ORDER_PING_ROLE_ID")
     ping_role = guild.get_role(ping_role_id) if ping_role_id else None
     if not ping_role:
-        # Fallback to T3 builder role
         t3_role_id = fresh_cfg.get("BUILDER_T3_ROLE_ID")
         ping_role = guild.get_role(t3_role_id) if t3_role_id else None
     if ping_role:
         await orders_channel.send(f"{ping_role.mention} New build order available! ⬆️")
-    else:
-        print(f"⚠️ No ping role found for builder-orders in guild {guild.id}")
 
 
 # ---------------------------------------------------------------------------
@@ -348,10 +326,7 @@ class BuilderClaimView(discord.ui.View):
             return await interaction.response.send_message("❌ Ticket channel not found.", ephemeral=True)
 
         await ticket_ch.set_permissions(interaction.user, read_messages=True, send_messages=True)
-        db["building_orders"].update_one(
-            {"ticket_channel_id": self.order["ticket_channel_id"]},
-            {"$set": {"builder_id": interaction.user.id, "status": "claimed"}}
-        )
+        db["building_orders"].update_one({"ticket_channel_id": self.order["ticket_channel_id"]}, {"$set": {"builder_id": interaction.user.id, "status": "claimed"}})
 
         embed = interaction.message.embeds[0]
         embed.add_field(name="Claimed By", value=interaction.user.mention, inline=False)
@@ -363,41 +338,63 @@ class BuilderClaimView(discord.ui.View):
 
 
 # ---------------------------------------------------------------------------
-# Build Panel View & Button
+# Build Panel View & Dropdown & Custom Button
 # ---------------------------------------------------------------------------
 class BuildPanelView(discord.ui.View):
     def __init__(self, builds: list):
         super().__init__(timeout=None)
-        for b in builds:
-            self.add_item(BuildButton(b))
+        
+        # Dropdown for existing builds
+        if builds:
+            options = [
+                discord.SelectOption(
+                    label=b["name"], 
+                    description=f"Price: {b['price']}", 
+                    value=b["id"],
+                    emoji=b.get("emoji", "🧱")
+                ) for b in builds
+            ]
+            self.add_item(BuildDropdown(options, builds))
+            
+        # Custom build button
+        self.add_item(CustomBuildButton())
 
 
-class BuildButton(discord.ui.Button):
-    def __init__(self, build: dict):
-        raw_emoji = build.get("emoji", "🧱")
-        try:
-            if not raw_emoji or not isinstance(raw_emoji, str):
-                emoji = "🧱"
-            elif raw_emoji.startswith("<") and raw_emoji.endswith(">"):
-                emoji = discord.PartialEmoji.from_str(raw_emoji)
-            elif len(raw_emoji) == 1:
-                emoji = raw_emoji
-            else:
-                raise ValueError("Invalid emoji format")
-        except Exception:
-            emoji = "🧱"
-            print(f"⚠️ Invalid emoji for build '{build.get('name')}': {raw_emoji!r} – using default")
-
+class BuildDropdown(discord.ui.Select):
+    def __init__(self, options: list, builds: list):
         super().__init__(
-            label=build["name"],
-            style=discord.ButtonStyle.primary,
-            custom_id=f"build_{build['id']}",
-            emoji=emoji
+            placeholder="Choose a build package...",
+            min_values=1,
+            max_values=1,
+            options=options
         )
-        self.build = build
+        self.builds = {b["id"]: b for b in builds}
 
     async def callback(self, interaction: discord.Interaction):
-        modal = BuildOrderModal(self.build)
+        build = self.builds.get(self.values[0])
+        if not build:
+            return await interaction.response.send_message("❌ Build not found.", ephemeral=True)
+        modal = BuildOrderModal(build)
+        await interaction.response.send_modal(modal)
+
+
+class CustomBuildButton(discord.ui.Button):
+    def __init__(self):
+        super().__init__(
+            label="Custom Build",
+            style=discord.ButtonStyle.success,
+            custom_id="custom_build_btn",
+            emoji="🪄"
+        )
+        self.custom_build_dict = {
+            "id": "custom",
+            "name": "Custom Build",
+            "price": "Quote Pending",
+            "emoji": "🪄"
+        }
+
+    async def callback(self, interaction: discord.Interaction):
+        modal = BuildOrderModal(self.custom_build_dict)
         await interaction.response.send_modal(modal)
 
 
@@ -416,12 +413,10 @@ class Building(commands.Cog):
         for doc in self.bot.db["building_panels"].find():
             guild_id = doc["guild_id"]
             builds = doc.get("builds", [])
-            if builds:
-                view = BuildPanelView(builds)
-                self.bot.add_view(view)
-                print(f"✅ Restored build panel view for guild {guild_id}")
+            view = BuildPanelView(builds)
+            self.bot.add_view(view)
+            print(f"✅ Restored build panel view for guild {guild_id}")
 
-        # Re-apply Trusted Staff and T1 Builder permissions to all existing build ticket channels
         for guild in self.bot.guilds:
             cfg = self.bot.db["bot_config"].find_one({"guild_id": guild.id}) or {}
             trusted_staff_name = cfg.get("TRUSTED_STAFF_ROLE")
@@ -429,18 +424,12 @@ class Building(commands.Cog):
             t1_role = guild.get_role(cfg.get("BUILDER_T1_ROLE_ID")) if cfg.get("BUILDER_T1_ROLE_ID") else None
 
             for channel in guild.text_channels:
-                if not channel.name.startswith("build-"):
-                    continue
+                if not channel.name.startswith("build-"): continue
                 try:
-                    if trusted_staff:
-                        await channel.set_permissions(trusted_staff, read_messages=True, send_messages=True)
-                    if t1_role:
-                        await channel.set_permissions(t1_role, read_messages=True, send_messages=True)
+                    if trusted_staff: await channel.set_permissions(trusted_staff, read_messages=True, send_messages=True)
+                    if t1_role: await channel.set_permissions(t1_role, read_messages=True, send_messages=True)
                 except discord.Forbidden:
-                    print(f"⚠️ No permission to update overwrites in {channel.name}")
-                except Exception as e:
-                    print(f"⚠️ Failed to update {channel.name}: {e}")
-        print("✅ Re-applied Trusted Staff and T1 Builder permissions to existing build tickets")
+                    pass
 
     @app_commands.command(name="buildpanel", description="Post/update the build ordering panel")
     @admin_only()
@@ -450,14 +439,20 @@ class Building(commands.Cog):
         db = self.bot.db
         panel = db["building_panels"].find_one({"guild_id": interaction.guild.id})
         if not panel or not panel.get("builds"):
-            return await interaction.edit_original_response(
-                content="❌ No builds configured. Set them up in the dashboard first."
-            )
+            return await interaction.edit_original_response(content="❌ No builds configured. Set them up in the dashboard first.")
 
         builds = panel["builds"]
+        
+        # Format the embed to list builds
+        desc_lines = ["Select a build from the dropdown below to place your order.\n\n**Available Builds:**\n"]
+        for b in builds:
+            emoji = b.get("emoji", "🧱")
+            desc_lines.append(f"{emoji} **{b['name']}** - `{b['price']}`")
+        desc_lines.append(f"\n🪄 **Custom Build** - `Quote Pending` (Select the custom button)")
+        
         embed = discord.Embed(
             title="🏗️ Build Orders",
-            description="Select a build below to place your order.",
+            description="\n".join(desc_lines),
             color=0x5865F2
         )
         if interaction.guild.icon:
@@ -466,35 +461,154 @@ class Building(commands.Cog):
         original_msg = await interaction.original_response()
         async for msg in interaction.channel.history(limit=20):
             if msg.author == self.bot.user and msg.id != original_msg.id:
-                try:
-                    await msg.delete()
-                except discord.HTTPException:
-                    pass
+                try: await msg.delete()
+                except discord.HTTPException: pass
 
         view = BuildPanelView(builds)
         await interaction.edit_original_response(content=None, embed=embed, view=view)
 
+    # -----------------------------------------------------------------------
+    # NEW SLASH COMMANDS
+    # -----------------------------------------------------------------------
+    
+    build_group = app_commands.Group(name="build", description="Manage build tickets", guild_only=True)
+
+    @build_group.command(name="paid", description="Mark a build ticket as paid (bypasses button)")
+    async def build_paid(self, interaction: discord.Interaction):
+        if not has_cmd_perm(interaction, "build paid"):
+            return await interaction.response.send_message("❌ You do not have permission to use this command.", ephemeral=True)
+        
+        db = interaction.client.db
+        order = db["building_orders"].find_one({"ticket_channel_id": interaction.channel.id})
+        if not order:
+            return await interaction.response.send_message("❌ This is not a valid build ticket channel.", ephemeral=True)
+        if order["status"] != "unpaid":
+            return await interaction.response.send_message("❌ This order is not awaiting payment.", ephemeral=True)
+
+        cfg = get_guild_config(db, interaction.guild.id)
+        confirmation_role_id = cfg.get("BUILD_TICKET_PING_ROLE_ID")
+        confirmation_role = interaction.guild.get_role(confirmation_role_id) if confirmation_role_id else None
+        
+        # Unmute buyer
+        buyer = interaction.guild.get_member(order["buyer_id"])
+        if buyer:
+            overwrites = interaction.channel.overwrites_for(buyer)
+            overwrites.send_messages = True
+            await interaction.channel.set_permissions(buyer, overwrite=overwrites)
+
+        db["building_orders"].update_one({"ticket_channel_id": interaction.channel.id}, {"$set": {"status": "confirmed"}})
+        
+        embed = discord.Embed(title="✅ Payment Manually Confirmed", description="Order is now confirmed and buyer can speak.", color=0x2ecc71)
+        await interaction.response.send_message(embed=embed)
+        
+        try:
+            await post_order_to_builder_channel(interaction, interaction.channel.id)
+        except Exception as e:
+            print(f"Error posting to builder channel: {e}")
+
+    @build_group.command(name="money", description="Set the money owed on a ticket")
+    @app_commands.describe(amount="The new price/amount owed (e.g. '500k' or '$10')")
+    async def build_money(self, interaction: discord.Interaction, amount: str):
+        if not has_cmd_perm(interaction, "build money set"):
+            return await interaction.response.send_message("❌ You do not have permission to use this command.", ephemeral=True)
+            
+        db = interaction.client.db
+        order = db["building_orders"].find_one({"ticket_channel_id": interaction.channel.id})
+        if not order:
+            return await interaction.response.send_message("❌ This is not a valid build ticket channel.", ephemeral=True)
+
+        db["building_orders"].update_one({"ticket_channel_id": interaction.channel.id}, {"$set": {"price": amount}})
+        await interaction.response.send_message(f"💰 Price updated to `{amount}` for this order.")
+
+    @build_group.command(name="claim", description="Claim a build ticket for yourself")
+    async def build_claim(self, interaction: discord.Interaction):
+        if not has_cmd_perm(interaction, "build claim"):
+            return await interaction.response.send_message("❌ You do not have permission to use this command.", ephemeral=True)
+            
+        db = interaction.client.db
+        order = db["building_orders"].find_one({"ticket_channel_id": interaction.channel.id})
+        if not order:
+            return await interaction.response.send_message("❌ This is not a valid build ticket channel.", ephemeral=True)
+        if order.get("builder_id"):
+            return await interaction.response.send_message("❌ This order is already claimed.", ephemeral=True)
+
+        await interaction.channel.set_permissions(interaction.user, read_messages=True, send_messages=True)
+        db["building_orders"].update_one({"ticket_channel_id": interaction.channel.id}, {"$set": {"builder_id": interaction.user.id, "status": "claimed"}})
+        await interaction.response.send_message(f"🔨 {interaction.user.mention} has claimed this build order.")
+
+    @build_group.command(name="complete", description="Mark a build ticket as completed")
+    async def build_complete(self, interaction: discord.Interaction):
+        if not has_cmd_perm(interaction, "build complete"):
+            return await interaction.response.send_message("❌ You do not have permission to use this command.", ephemeral=True)
+            
+        db = interaction.client.db
+        order = db["building_orders"].find_one({"ticket_channel_id": interaction.channel.id})
+        if not order:
+            return await interaction.response.send_message("❌ This is not a valid build ticket channel.", ephemeral=True)
+
+        db["building_orders"].update_one({"ticket_channel_id": interaction.channel.id}, {"$set": {"status": "completed"}})
+        embed = discord.Embed(title="🎉 Build Completed", description="This order has been marked as completed. Closing in 5 seconds...", color=0x2ecc71)
+        await interaction.response.send_message(embed=embed)
+        await asyncio.sleep(5)
+        try:
+            await interaction.channel.delete(reason="Build completed")
+        except Exception: pass
+
+    @build_group.command(name="cancel", description="Cancel and close a build ticket")
+    async def build_cancel(self, interaction: discord.Interaction):
+        if not has_cmd_perm(interaction, "build cancel"):
+            return await interaction.response.send_message("❌ You do not have permission to use this command.", ephemeral=True)
+            
+        db = interaction.client.db
+        order = db["building_orders"].find_one({"ticket_channel_id": interaction.channel.id})
+        if not order:
+            return await interaction.response.send_message("❌ This is not a valid build ticket channel.", ephemeral=True)
+
+        db["building_orders"].update_one({"ticket_channel_id": interaction.channel.id}, {"$set": {"status": "cancelled"}})
+        await interaction.response.send_message("❌ Ticket cancelled. Closing in 3 seconds...")
+        await asyncio.sleep(3)
+        try:
+            await interaction.channel.delete(reason="Build cancelled")
+        except Exception: pass
+
+    @build_group.command(name="addnote", description="Add a staff note to the build ticket")
+    @app_commands.describe(note="The note to add to the ticket logs")
+    async def build_addnote(self, interaction: discord.Interaction, note: str):
+        if not has_cmd_perm(interaction, "build addnote"):
+            return await interaction.response.send_message("❌ You do not have permission to use this command.", ephemeral=True)
+            
+        db = interaction.client.db
+        order = db["building_orders"].find_one({"ticket_channel_id": interaction.channel.id})
+        if not order:
+            return await interaction.response.send_message("❌ This is not a valid build ticket channel.", ephemeral=True)
+
+        note_doc = {
+            "author": interaction.user.display_name,
+            "content": note,
+            "at": datetime.now(timezone.utc)
+        }
+        db["building_orders"].update_one({"ticket_channel_id": interaction.channel.id}, {"$push": {"notes": note_doc}})
+        
+        embed = discord.Embed(title="📝 Note Added", description=note, color=0x5865F2, timestamp=note_doc["at"])
+        embed.set_author(name=interaction.user.display_name, icon_url=interaction.user.display_avatar.url)
+        await interaction.response.send_message(embed=embed)
+
     @commands.Cog.listener()
     async def on_member_update(self, before: discord.Member, after: discord.Member):
         cfg = self.bot.db["bot_config"].find_one({"guild_id": after.guild.id}) or {}
-
         t1_role_id = cfg.get("BUILDER_T1_ROLE_ID")
         t1_role = after.guild.get_role(t1_role_id) if t1_role_id else None
-
         trusted_staff_name = cfg.get("TRUSTED_STAFF_ROLE")
         trusted_staff = discord.utils.get(after.guild.roles, name=trusted_staff_name) if trusted_staff_name else None
 
-        # If user just received T1 Builder or Trusted Staff role, grant access to all build tickets
         gained_t1 = t1_role and t1_role in after.roles and t1_role not in before.roles
         gained_trusted = trusted_staff and trusted_staff in after.roles and trusted_staff not in before.roles
 
         if gained_t1 or gained_trusted:
             for ch in after.guild.text_channels:
                 if ch.name.startswith("build-"):
-                    try:
-                        await ch.set_permissions(after, read_messages=True, send_messages=True)
-                    except Exception as e:
-                        print(f"Failed to grant build ticket access to {after.name} in {ch.name}: {e}")
+                    try: await ch.set_permissions(after, read_messages=True, send_messages=True)
+                    except Exception: pass
 
 
 async def setup(bot: commands.Bot):
