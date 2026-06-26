@@ -54,21 +54,33 @@ async def get_player_balance(ign: str) -> float | None:
     headers = {}
     if DONUTSMP_API_KEY:
         headers["Authorization"] = f"Bearer {DONUTSMP_API_KEY}"
+
     async with aiohttp.ClientSession() as session:
         try:
             async with session.get(url, headers=headers, timeout=10) as resp:
                 raw = await resp.text()
+
                 if resp.status != 200:
-                    logger.error(f"DonutSMP API error for {ign}: {resp.status} - {raw}")
+                    logger.error(
+                        f"DonutSMP API error for {ign}: {resp.status} - {raw}"
+                    )
                     return None
 
                 # Try JSON first (in case the API ever changes content-type)
                 import json as _json
+
                 try:
                     data = _json.loads(raw)
-                    balance = data.get("money") or data.get("balance") or data.get("coins")
+                    result = data.get("result", data)  # fall back to data itself if no "result" key
+                    balance = (
+                        result.get("money")
+                        or result.get("balance")
+                        or result.get("coins")
+                    )
+
                     if balance is not None:
                         return float(balance)
+
                 except (_json.JSONDecodeError, AttributeError):
                     pass
 
@@ -78,22 +90,29 @@ async def get_player_balance(ign: str) -> float | None:
                     line = line.strip()
                     if not line:
                         continue
+
                     for key in ("money", "balance", "coins"):
                         if line.lower().startswith(key):
                             # strip the key and any separators (: = space)
                             value_part = line[len(key):].lstrip(":= \t")
+
                             # strip commas and whitespace
                             value_part = value_part.replace(",", "").strip()
+
                             try:
                                 return float(value_part)
                             except ValueError:
                                 pass
 
-                logger.error(f"DonutSMP API: could not find money in response for {ign}. Raw: {raw!r}")
+                logger.error(
+                    f"DonutSMP API: could not find money in response for {ign}. Raw: {raw!r}"
+                )
                 return None
+
         except Exception as e:
             logger.error(f"DonutSMP API request failed for {ign}: {e}")
             return None
+
 
 
 def parse_price(price_str: str) -> float | None:
