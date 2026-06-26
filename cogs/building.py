@@ -6,7 +6,7 @@ from discord import app_commands
 from datetime import datetime, timedelta, timezone
 from bson import ObjectId
 from cogs.config import admin_only, get_guild_config
-from cogs.tickets_base import TicketView
+from cogs.tickets_base import TicketView, _close_ticket
 import asyncio
 import aiohttp
 import os
@@ -147,10 +147,12 @@ async def monitor_payment(order_id: str, db, guild_id: int, buyer_ign: str, rece
     # Parse the expected payment amount once
     expected_amount = parse_price(amount)
     if expected_amount is None:
-        logger.error(f"monitor_payment: could not parse price '{amount}' for order {order_id}. Aborting monitor.")
+        # Price is non-numeric (e.g. "Quote Pending" for custom builds) — skip auto-monitoring
+        # and leave the order in payment_pending so staff can manually confirm with /build paid
+        logger.info(f"monitor_payment: price '{amount}' is not numeric for order {order_id}. Skipping auto-monitor — staff must confirm manually.")
         db["building_orders"].update_one(
             {"_id": ObjectId(order_id)},
-            {"$set": {"payment_status": "error", "payment_error": f"Could not parse price: {amount}"}}
+            {"$set": {"payment_status": "manual", "payment_error": f"Non-numeric price: {amount}"}}
         )
         return
 
@@ -226,6 +228,168 @@ async def monitor_payment(order_id: str, db, guild_id: int, buyer_ign: str, rece
     user = bot.get_user(buyer_id)
     if user:
         await user.send(f"⏰ Your order for **{build['name']}** expired because payment was not received within 30 minutes. You can re‑apply if you still wish to order.")
+
+# ── Custom Build Payment Countdown ───────────────────────────────────
+async def monitor_custom_payment_countdown(
+    channel_id: int, guild_id: int, buyer_id: int,
+    amount: str, receiver_ign: str, countdown_msg_id: int,
+    db, bot
+):
+    """
+    Waits 30 minutes after /build money is set on a Custom Build ticket.
+    - If the order reaches 'confirmed' status (paid via /build paid or button) → do nothing (already handled).
+    - If still unpaid after 30 minutes → close the ticket and send transcript log.
+    """
+    await asyncio.sleep(30 * 60)  # 30 minutes
+
+    guild = bot.get_guild(guild_id)
+    if not guild:
+        return
+
+    channel = guild.get_channel(channel_id)
+    if not channel:
+        return  # Channel already deleted
+
+    # Check if payment was already confirmed
+    order = db["building_orders"].find_one({"ticket_channel_id": channel_id})
+    if not order:
+        return
+
+    if order.get("status") in ("confirmed", "claimed", "completed", "cancelled"):
+        # Already handled — do nothing
+        return
+
+    # Payment not received in time — mark cancelled and close with transcript
+    try:
+        db["building_orders"].update_one(
+            {"ticket_channel_id": channel_id},
+            {"$set": {"status": "cancelled", "payment_status": "expired"}}
+        )
+    except Exception as e:
+        logger.error(f"monitor_custom_payment_countdown: failed to update order: {e}")
+
+    try:
+        buyer = guild.get_member(buyer_id)
+        buyer_mention = buyer.mention if buyer else f"<@{buyer_id}>"
+        expire_embed = discord.Embed(
+            title="⏰ Payment Timeout — Ticket Closing",
+            description=(
+                f"{buyer_mention} The 30-minute payment window has expired.\n\n"
+                f"**Amount due:** `{amount}`\n"
+                f"**Receiver IGN:** `{receiver_ign}`\n\n"
+                f"No payment was confirmed. This ticket will now be closed and logged."
+            ),
+            color=0xe74c3c,
+            timestamp=datetime.now(timezone.utc)
+        )
+        await channel.send(embed=expire_embed)
+    except Exception as e:
+        logger.error(f"monitor_custom_payment_countdown: failed to send expire embed: {e}")
+
+    # Small delay so the message is visible before deletion
+    await asyncio.sleep(5)
+
+    # Close using the standard ticket close (generates transcript + logs)
+    try:
+        await _close_ticket(channel, bot.user, db)
+    except Exception as e:
+        logger.error(f"monitor_custom_payment_countdown: failed to close ticket: {e}")
+
+
+class CustomPaymentView(discord.ui.View):
+    """
+    Sent in the ticket when /build money is used on a Custom Build.
+    Shows a 'Mark as Paid' button (staff/buyer confirms payment manually).
+    Replaces the old PaymentView flow for custom orders.
+    """
+    def __init__(self, buyer_id: int, channel_id: int, amount: str, receiver_ign: str, confirmation_role_id: int | None):
+        super().__init__(timeout=None)
+        self.buyer_id = buyer_id
+        self.channel_id = channel_id
+        self.amount = amount
+        self.receiver_ign = receiver_ign
+        self.confirmation_role_id = confirmation_role_id
+
+        paid_btn = discord.ui.Button(
+            label="✅ Mark as Paid",
+            style=discord.ButtonStyle.green,
+            custom_id=f"custom_paid_{channel_id}"
+        )
+        paid_btn.callback = self.paid_callback
+        self.add_item(paid_btn)
+
+    async def paid_callback(self, interaction: discord.Interaction):
+        db = interaction.client.db
+        confirmation_role = interaction.guild.get_role(self.confirmation_role_id) if self.confirmation_role_id else None
+        is_staff = interaction.user.guild_permissions.administrator or (
+            confirmation_role and confirmation_role in interaction.user.roles
+        )
+        if not is_staff:
+            return await interaction.response.send_message(
+                "❌ Only staff can confirm payment.", ephemeral=True
+            )
+
+        order = db["building_orders"].find_one({"ticket_channel_id": self.channel_id})
+        if not order:
+            return await interaction.response.send_message("❌ Order not found.", ephemeral=True)
+        if order.get("status") == "confirmed":
+            return await interaction.response.send_message("❌ Already confirmed.", ephemeral=True)
+
+        # Unlock buyer and confirm
+        buyer = interaction.guild.get_member(self.buyer_id)
+        if buyer:
+            overwrites = interaction.channel.overwrites_for(buyer)
+            overwrites.send_messages = True
+            overwrites.read_messages = True
+            try:
+                await interaction.channel.set_permissions(buyer, overwrite=overwrites)
+            except discord.Forbidden:
+                pass
+
+        db["building_orders"].update_one(
+            {"ticket_channel_id": self.channel_id},
+            {"$set": {"status": "confirmed", "payment_status": "confirmed",
+                       "payment_confirmed_time": datetime.now(timezone.utc)}}
+        )
+
+        # Payment log
+        try:
+            cfg = db["bot_config"].find_one({"guild_id": interaction.guild.id}) or {}
+            log_channel_id = cfg.get("PAYMENT_LOG_CHANNEL_ID")
+            if log_channel_id:
+                log_channel = interaction.guild.get_channel(int(log_channel_id))
+                if log_channel:
+                    log_embed = discord.Embed(
+                        title="✅ Custom Build Payment Confirmed",
+                        description=(
+                            f"**{order.get('ign', 'Unknown')}** paid **{self.amount}** "
+                            f"to **{self.receiver_ign}** — confirmed by {interaction.user.mention}"
+                        ),
+                        color=0x2ecc71,
+                        timestamp=datetime.now(timezone.utc)
+                    )
+                    log_embed.add_field(name="Build", value=order.get("build_name", "Custom Build"), inline=True)
+                    log_embed.add_field(name="Buyer", value=f"<@{self.buyer_id}>", inline=True)
+                    log_embed.add_field(name="Price", value=self.amount, inline=True)
+                    log_embed.set_footer(text=f"Ticket Channel: {self.channel_id}")
+                    await log_channel.send(embed=log_embed)
+        except Exception as e:
+            logger.error(f"CustomPaymentView: failed to send payment log: {e}")
+
+        success_embed = discord.Embed(
+            title="✅ Payment Confirmed",
+            description="Payment manually confirmed. The buyer can now speak. Posting to builder orders...",
+            color=0x2ecc71,
+            timestamp=datetime.now(timezone.utc)
+        )
+        await interaction.response.edit_message(embed=success_embed, view=None)
+
+        # Post to builder orders channel
+        try:
+            await post_order_to_builder_channel(interaction, self.channel_id)
+        except Exception as e:
+            logger.error(f"CustomPaymentView: failed to post to builder channel: {e}")
+
 
 # ── Ticket Creation (refactored from modal) ──────────────────────────
 async def create_build_ticket_from_modal(bot, guild, buyer, build, modal_data, receiver_ign, amount):
@@ -387,12 +551,19 @@ class BuildOrderModal(discord.ui.Modal, title="Place a Build Order"):
             )
         )
 
-        await interaction.response.send_message(
-            f"✅ Order placed! Please pay **{amount}** to in‑game player **{receiver_ign}** within 30 minutes.\n"
-            f"The bot will automatically open your ticket once payment is confirmed.\n\n"
-            f"**IGN:** {ign}\n**Region:** {region}\n**Farm:** {farm_name}",
-            ephemeral=True
-        )
+        if parse_price(amount) is not None:
+            await interaction.response.send_message(
+                f"✅ Order placed! Please pay **{amount}** to in‑game player **{receiver_ign}** within 30 minutes.\n"
+                f"The bot will automatically open your ticket once payment is confirmed.\n\n"
+                f"**IGN:** {ign}\n**Region:** {region}\n**Farm:** {farm_name}",
+                ephemeral=True
+            )
+        else:
+            await interaction.response.send_message(
+                f"✅ Order placed! Staff will reach out to confirm your price and payment.\n\n"
+                f"**IGN:** {ign}\n**Region:** {region}\n**Farm:** {farm_name}",
+                ephemeral=True
+            )
 
 # ── Views (Payment & Builder Claim) ──────────────────────────────────
 class PaymentView(discord.ui.View):
@@ -412,6 +583,13 @@ class PaymentView(discord.ui.View):
     async def paid_callback(self, interaction: discord.Interaction):
         if interaction.user.id != self.buyer_id:
             return await interaction.response.send_message("❌ Only the order owner can mark this as paid.", ephemeral=True)
+        db = interaction.client.db
+        order = db["building_orders"].find_one({"ticket_channel_id": self.channel_id})
+        if not order or parse_price(str(order.get("price", ""))) is None:
+            return await interaction.response.send_message(
+                "❌ A price hasn't been set for this order yet. Please wait for staff to use `/build money` first.",
+                ephemeral=True
+            )
         confirmation_role = interaction.guild.get_role(self.confirmation_role_id) if self.confirmation_role_id else None
         confirm_view = ConfirmPaymentView(self.buyer_id, self.channel_id, confirmation_role)
         embed = discord.Embed(
@@ -819,8 +997,81 @@ class Building(commands.Cog):
         order = db["building_orders"].find_one({"ticket_channel_id": interaction.channel.id})
         if not order:
             return await interaction.response.send_message("❌ This is not a valid build ticket channel.", ephemeral=True)
-        db["building_orders"].update_one({"ticket_channel_id": interaction.channel.id}, {"$set": {"price": amount}})
-        await interaction.response.send_message(f"💰 Price updated to `{amount}` for this order.")
+
+        is_custom = order.get("build_name", "").lower() == "custom build" or \
+                    order.get("build_id", "") == "custom" or \
+                    str(order.get("price", "")).lower() in ("quote pending", "")
+
+        db["building_orders"].update_one(
+            {"ticket_channel_id": interaction.channel.id},
+            {"$set": {"price": amount, "payment_status": "pending_custom_countdown"}}
+        )
+
+        if is_custom:
+            # --- Custom Build: send payment countdown ping instead of silent update ---
+            cfg = db["bot_config"].find_one({"guild_id": interaction.guild.id}) or {}
+            receiver_ign = cfg.get("PAYMENT_RECEIVER_IGN", "the receiver")
+            confirmation_role_id = cfg.get("BUILD_TICKET_PING_ROLE_ID")
+
+            buyer_id = order.get("buyer_id")
+            buyer = interaction.guild.get_member(buyer_id) if buyer_id else None
+            buyer_mention = buyer.mention if buyer else (f"<@{buyer_id}>" if buyer_id else "the buyer")
+
+            # Unix timestamp 30 minutes from now for Discord countdown
+            deadline_ts = int((datetime.now(timezone.utc) + timedelta(minutes=30)).timestamp())
+
+            countdown_embed = discord.Embed(
+                title="💰 Payment Required — 30 Minutes to Pay",
+                description=(
+                    f"{buyer_mention} A price has been set for your Custom Build order!\n\n"
+                    f"**Amount:** `{amount}`\n"
+                    f"**Pay in-game to:** `{receiver_ign}`\n\n"
+                    f"⏳ You have until <t:{deadline_ts}:T> (<t:{deadline_ts}:R>) to complete payment.\n\n"
+                    f"Once paid, a staff member will confirm it below. "
+                    f"If payment is not confirmed in time, this ticket will be automatically closed."
+                ),
+                color=0xf1c40f,
+                timestamp=datetime.now(timezone.utc)
+            )
+            countdown_embed.set_footer(text="Staff: click 'Mark as Paid' once payment is received in-game.")
+
+            view = CustomPaymentView(
+                buyer_id=buyer_id,
+                channel_id=interaction.channel.id,
+                amount=amount,
+                receiver_ign=receiver_ign,
+                confirmation_role_id=confirmation_role_id
+            )
+
+            await interaction.response.send_message(
+                content=buyer_mention,
+                embed=countdown_embed,
+                view=view
+            )
+
+            # Save message ID for reference and launch the 30-minute watchdog
+            countdown_msg = await interaction.original_response()
+            db["building_orders"].update_one(
+                {"ticket_channel_id": interaction.channel.id},
+                {"$set": {"custom_countdown_msg_id": countdown_msg.id,
+                           "custom_countdown_started": datetime.now(timezone.utc)}}
+            )
+
+            asyncio.create_task(
+                monitor_custom_payment_countdown(
+                    channel_id=interaction.channel.id,
+                    guild_id=interaction.guild.id,
+                    buyer_id=buyer_id,
+                    amount=amount,
+                    receiver_ign=receiver_ign,
+                    countdown_msg_id=countdown_msg.id,
+                    db=db,
+                    bot=interaction.client
+                )
+            )
+        else:
+            # --- Regular build: just update price silently ---
+            await interaction.response.send_message(f"💰 Price updated to `{amount}` for this order.")
 
     @build_group.command(name="claim", description="Claim a build ticket for yourself")
     async def build_claim(self, interaction: discord.Interaction):
