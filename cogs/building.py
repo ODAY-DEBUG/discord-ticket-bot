@@ -189,7 +189,7 @@ async def monitor_payment(order_id: str, db, guild_id: int, buyer_ign: str, rece
             # Send log to payment log channel
             guild = bot.get_guild(guild_id)
             if guild:
-                cfg = get_guild_config(db, guild.id)
+                cfg = db["bot_config"].find_one({"guild_id": guild.id}) or {}
                 log_channel_id = cfg.get("PAYMENT_LOG_CHANNEL_ID")
                 if log_channel_id:
                     log_channel = guild.get_channel(int(log_channel_id))
@@ -281,7 +281,7 @@ async def create_build_ticket_from_modal(bot, guild, buyer, build, modal_data, r
         {"guild_id": guild.id, "buyer_id": buyer.id, "build_id": build["id"]},
         {"$set": {
             "ticket_channel_id": channel.id,
-            "status": "unpaid",
+            "status": "confirmed",
             "builder_id": None,
             "order_message_id": None,
         }},
@@ -314,6 +314,12 @@ async def create_build_ticket_from_modal(bot, guild, buyer, build, modal_data, r
         await channel.send(f"{t3_role.mention} New build order! Please review and claim.")
 
     await buyer.send(f"✅ Your build ticket for **{build['name']}** has been created: {channel.mention}")
+
+    # Post to the builder orders channel so builders can claim it
+    try:
+        await post_order_to_builder_channel(bot, channel.id, guild)
+    except Exception as e:
+        logger.error(f"Error posting to builder orders channel: {e}")
 
 # ── Modals ─────────────────────────────────────────────────────────────
 class BuildOrderModal(discord.ui.Modal, title="Place a Build Order"):
@@ -512,9 +518,21 @@ class ConfirmPaymentView(discord.ui.View):
         await interaction.response.edit_message(embed=embed, view=pay_view)
 
 # ── Post order to builder-orders channel ──────────────────────────────
-async def post_order_to_builder_channel(interaction: discord.Interaction, ticket_channel_id: int):
-    guild = interaction.guild
-    db = interaction.client.db
+async def post_order_to_builder_channel(interaction_or_bot, ticket_channel_id: int, guild: discord.Guild = None):
+    """
+    Can be called with (interaction, ticket_channel_id) from button callbacks,
+    or with (bot, ticket_channel_id, guild) from the background monitor path.
+    """
+    if isinstance(interaction_or_bot, discord.Interaction):
+        interaction = interaction_or_bot
+        guild = interaction.guild
+        db = interaction.client.db
+    else:
+        # Called as (bot, ticket_channel_id, guild)
+        bot = interaction_or_bot
+        db = bot.db
+        # guild is passed explicitly
+
     order = db["building_orders"].find_one({"ticket_channel_id": ticket_channel_id})
     if not order: return
 
