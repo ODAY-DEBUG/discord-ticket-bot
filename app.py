@@ -17,7 +17,10 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
-app.secret_key = os.getenv("FLASK_SECRET", "make_up_a_random_string_here")
+flask_secret = os.getenv("FLASK_SECRET")
+if not flask_secret:
+    raise RuntimeError("FLASK_SECRET environment variable must be set!")
+app.secret_key = flask_secret
 
 # Force Flask to use secure cookies for HTTPS (Railway)
 app.config['SESSION_COOKIE_SECURE'] = True
@@ -190,6 +193,11 @@ def view_transcript_raw(transcript_id):
 def guild_dashboard(guild_id):
     if "access_token" not in session:
         return redirect("/")
+
+    # Verify the logged-in user actually has access to this guild
+    user_guild_ids = [int(g["id"]) for g in session.get("guilds", [])]
+    if guild_id not in user_guild_ids:
+        abort(403)
 
     if db is None:
         return "<h1>Error: Database connection not available!</h1>", 500
@@ -502,6 +510,10 @@ def commands_dashboard(guild_id):
     if "access_token" not in session:
         return redirect("/")
 
+    user_guild_ids = [int(g["id"]) for g in session.get("guilds", [])]
+    if guild_id not in user_guild_ids:
+        abort(403)
+
     if db is None:
         logger.error("❌ [CMD_PERMS] db is None — MongoDB never connected!")
         if request.method == "POST":
@@ -701,6 +713,10 @@ def builds_dashboard(guild_id):
     if "access_token" not in session:
         return redirect("/")
 
+    user_guild_ids = [int(g["id"]) for g in session.get("guilds", [])]
+    if guild_id not in user_guild_ids:
+        abort(403)
+
     if db is None:
         return "<h1>Error: Database connection not available!</h1>", 500
 
@@ -804,6 +820,9 @@ def builds_dashboard(guild_id):
 def delete_build_order(guild_id):
     if "access_token" not in session:
         return jsonify({"success": False, "error": "Unauthorized"}), 401
+    user_guild_ids = [int(g["id"]) for g in session.get("guilds", [])]
+    if guild_id not in user_guild_ids:
+        return jsonify({"success": False, "error": "Forbidden"}), 403
     if db is None:
         return jsonify({"success": False, "error": "Database unavailable"}), 500
     guilds = session.get("guilds", [])

@@ -236,7 +236,8 @@ class BuildOrderModal(discord.ui.Modal, title="Place a Build Order"):
         region = self.children[1].value.strip()
         farm_name = self.children[2].value.strip()
 
-        cfg = get_guild_config(interaction.client.db, interaction.guild.id)
+        # Always read fresh from DB — get_guild_config may return a cached/stale value
+        cfg = interaction.client.db["bot_config"].find_one({"guild_id": interaction.guild.id}) or {}
         receiver_ign = cfg.get("PAYMENT_RECEIVER_IGN")
         if not receiver_ign:
             await interaction.response.send_message(

@@ -2,6 +2,7 @@
 
 import os
 import logging
+import threading
 from dotenv import load_dotenv
 from pymongo import MongoClient
 from pymongo.errors import ConnectionFailure, ServerSelectionTimeoutError
@@ -16,19 +17,22 @@ _client: MongoClient | None = None
 _db = None
 
 
+_lock = threading.Lock()
+
+
 def get_db():
-    """Return the shared discord_bot database handle (lazy singleton)."""
+    """Return the shared discord_bot database handle (lazy singleton, thread-safe)."""
     global _client, _db
-    
-    if _db is not None:
-        try:
-            # Test if connection is still alive
-            _client.admin.command('ping')
-            return _db
-        except Exception as e:
-            logger.warning(f"Existing MongoDB connection lost: {e}")
-            _client = None
-            _db = None
+
+    with _lock:
+        if _db is not None:
+            try:
+                _client.admin.command('ping')
+                return _db
+            except Exception as e:
+                logger.warning(f"Existing MongoDB connection lost: {e}")
+                _client = None
+                _db = None
 
     mongo_uri = os.getenv("MONGO_URI")
     if not mongo_uri:
