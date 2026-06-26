@@ -1,3 +1,5 @@
+# app.py – full file with payment log channel added
+
 import os
 from flask import Flask, render_template, redirect, request, session, Response, jsonify
 import requests
@@ -367,6 +369,10 @@ def guild_dashboard(guild_id):
             ticket_ping = request.form.get("BUILD_TICKET_PING_ROLE_ID")
             order_ping = request.form.get("BUILD_ORDER_PING_ROLE_ID")
             payment_method = request.form.get("PAYMENT_METHOD", "")
+            payment_receiver_ign = request.form.get("PAYMENT_RECEIVER_IGN", "").strip()
+            # NEW: payment log channel
+            payment_log_channel_id = request.form.get("PAYMENT_LOG_CHANNEL_ID")
+
             db["bot_config"].update_one(
                 {"guild_id": guild_id},
                 {"$set": {
@@ -375,13 +381,15 @@ def guild_dashboard(guild_id):
                     "BUILDER_T3_ROLE_ID": int(t3) if t3 and t3 != "none" else None,
                     "BUILD_TICKET_PING_ROLE_ID": int(ticket_ping) if ticket_ping and ticket_ping != "none" else None,
                     "BUILD_ORDER_PING_ROLE_ID": int(order_ping) if order_ping and order_ping != "none" else None,
-                    "PAYMENT_METHOD": payment_method.strip() if payment_method else ""
+                    "PAYMENT_METHOD": payment_method.strip() if payment_method else "",
+                    "PAYMENT_RECEIVER_IGN": payment_receiver_ign if payment_receiver_ign else None,
+                    "PAYMENT_LOG_CHANNEL_ID": int(payment_log_channel_id) if payment_log_channel_id and payment_log_channel_id != "none" else None,
                 }},
                 upsert=True
             )
         elif form_type == "add_build":
             build_name = request.form.get("build_name")
-            build_price = request.form.get("build_price")          # keep as string
+            build_price = request.form.get("build_price")
             build_desc = request.form.get("build_desc", "")
             build_emoji = request.form.get("build_emoji", "🧱")
             if build_name and build_price:
@@ -389,7 +397,7 @@ def guild_dashboard(guild_id):
                 new_build = {
                     "id": build_name.lower().replace(" ", "_"),
                     "name": build_name,
-                    "price": build_price,                          # string
+                    "price": build_price,
                     "description": build_desc,
                     "emoji": build_emoji
                 }
@@ -404,7 +412,7 @@ def guild_dashboard(guild_id):
         elif form_type == "update_build":
             build_id = request.form.get("edit_build_id")
             build_name = request.form.get("build_name")
-            build_price = request.form.get("build_price")          # string
+            build_price = request.form.get("build_price")
             build_desc = request.form.get("build_desc", "")
             build_emoji = request.form.get("build_emoji", "🧱")
             if build_id and build_name and build_price:
@@ -684,7 +692,7 @@ def commands_dashboard(guild_id):
 
 
 ## ─────────────────────────────────────────────────────────────────────────
-## ADD THIS ROUTE TO app.py  (paste after the commands_dashboard route)
+## Build Tracker Dashboard (unchanged)
 ## ─────────────────────────────────────────────────────────────────────────
 
 @app.route("/dashboard/<int:guild_id>/builds")
@@ -696,17 +704,15 @@ def builds_dashboard(guild_id):
     if db is None:
         return "<h1>Error: Database connection not available!</h1>", 500
 
-    # ── Permission: must be a guild manager ──────────────────────────────
     guilds = session.get("guilds", [])
     if not any(int(g["id"]) == guild_id for g in guilds):
         abort(403)
 
     guild_name = next((g["name"] for g in guilds if int(g["id"]) == guild_id), "Unknown Server")
 
-    # ── Fetch all orders for this guild ──────────────────────────────────
     all_orders = list(db["building_orders"].find({"guild_id": guild_id}))
 
-    # Resolve Discord usernames via bot token (best-effort, cached per request)
+    # Resolve Discord usernames via bot token
     user_cache = {}
     bot_headers = {"Authorization": f"Bot {BOT_TOKEN}", "User-Agent": "DashboardBot/1.0"}
 
@@ -741,22 +747,20 @@ def builds_dashboard(guild_id):
             "price": order.get("price", "—"),
             "status": order.get("status", "unknown"),
             "created_at": created_str,
+            "payment_status": order.get("payment_status", "confirmed"),
         }
 
-    active_statuses = {"unpaid", "confirmed", "claimed"}
-    active_orders   = [fmt_order(o) for o in all_orders if o.get("status") in active_statuses]
+    active_statuses = {"unpaid", "confirmed", "claimed", "payment_pending"}
+    active_orders   = [fmt_order(o) for o in all_orders if o.get("status") in active_statuses or o.get("payment_status") == "pending"]
     completed_orders = [fmt_order(o) for o in all_orders if o.get("status") == "completed"]
     cancelled_orders = [fmt_order(o) for o in all_orders if o.get("status") == "cancelled"]
 
-    # ── Builder stats ─────────────────────────────────────────────────────
-    # Group all orders that were ever claimed/completed/cancelled by builder_id
-    builder_map = {}  # builder_id -> { name, orders: [], completed, active, cancelled, first_build }
-
+    # Builder stats
+    builder_map = {}
     for order in all_orders:
         bid = order.get("builder_id")
         if not bid:
             continue
-
         if bid not in builder_map:
             builder_map[bid] = {
                 "name": resolve_user(bid),
@@ -766,18 +770,14 @@ def builds_dashboard(guild_id):
                 "cancelled": 0,
                 "first_build_dt": order.get("created_at"),
             }
-
         status = order.get("status", "")
         builder_map[bid]["orders"].append(fmt_order(order))
-
         if status == "completed":
             builder_map[bid]["completed"] += 1
         elif status in ("claimed", "confirmed"):
             builder_map[bid]["active"] += 1
         elif status == "cancelled":
             builder_map[bid]["cancelled"] += 1
-
-        # Track earliest order date
         dt = order.get("created_at")
         if dt and (builder_map[bid]["first_build_dt"] is None or dt < builder_map[bid]["first_build_dt"]):
             builder_map[bid]["first_build_dt"] = dt
@@ -788,8 +788,6 @@ def builds_dashboard(guild_id):
         data["first_build"] = dt.strftime("%d %b %Y") if dt else "Unknown"
         del data["first_build_dt"]
         builder_stats.append(data)
-
-    # Sort by completed desc, then active desc
     builder_stats.sort(key=lambda b: (b["completed"], b["active"]), reverse=True)
 
     return render_template(
@@ -801,23 +799,20 @@ def builds_dashboard(guild_id):
         cancelled_orders=cancelled_orders,
         builder_stats=builder_stats,
     )
+
 @app.route("/dashboard/<int:guild_id>/builds/delete", methods=["POST"])
 def delete_build_order(guild_id):
     if "access_token" not in session:
         return jsonify({"success": False, "error": "Unauthorized"}), 401
-
     if db is None:
         return jsonify({"success": False, "error": "Database unavailable"}), 500
-
     guilds = session.get("guilds", [])
     if not any(int(g["id"]) == guild_id for g in guilds):
         return jsonify({"success": False, "error": "Forbidden"}), 403
-
     data = request.get_json()
     order_id = data.get("order_id") if data else None
     if not order_id:
         return jsonify({"success": False, "error": "Missing order_id"}), 400
-
     try:
         result = db["building_orders"].delete_one({
             "_id": ObjectId(order_id),
@@ -836,24 +831,16 @@ def test_mongodb_route():
     """Diagnostic endpoint to test MongoDB connection."""
     if db is None:
         return jsonify({"error": "Database not connected"}), 500
-
     try:
-        # Test write
         test_guild = 999999
         test_cmd = "_test_command_"
-
         result = db["command_perms"].update_one(
             {"guild_id": test_guild, "command_name": test_cmd},
             {"$set": {"roles": ["test_role"], "guild_id": test_guild, "command_name": test_cmd}},
             upsert=True
         )
-
-        # Test read
         doc = db["command_perms"].find_one({"guild_id": test_guild, "command_name": test_cmd})
-
-        # Clean up
         db["command_perms"].delete_one({"guild_id": test_guild, "command_name": test_cmd})
-
         return jsonify({
             "success": True,
             "insert_result": str(result.raw_result),
