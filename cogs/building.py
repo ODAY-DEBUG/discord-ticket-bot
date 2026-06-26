@@ -43,48 +43,100 @@ def has_cmd_perm(interaction: discord.Interaction, command_name: str) -> bool:
     return False
 
 # ── API Payment Check ──────────────────────────────────────────────────
-async def check_payment_via_api(receiver_ign: str, buyer_ign: str, amount: str) -> bool:
+async def get_player_balance(ign: str) -> float | None:
     """
-    Query the DonutSMP API to confirm if buyer_ign has sent `amount` to receiver_ign.
-    Adapt the endpoint, parameters, and response parsing to your actual API.
+    Fetch the current in-game balance for a player from the DonutSMP API.
+    Endpoint: GET /v1/stats/{ign}
+    Returns the balance as a float, or None on error.
     """
-    url = f"{DONUTSMP_API_URL}/transactions"
-    params = {
-        "receiver": receiver_ign,
-        "sender": buyer_ign,
-        "amount": amount,
-        "limit": 1,
-    }
+    url = f"{DONUTSMP_API_URL}/v1/stats/{ign}"
     headers = {}
     if DONUTSMP_API_KEY:
         headers["Authorization"] = f"Bearer {DONUTSMP_API_KEY}"
     async with aiohttp.ClientSession() as session:
         try:
-            async with session.get(url, headers=headers, params=params, timeout=10) as resp:
+            async with session.get(url, headers=headers, timeout=10) as resp:
                 if resp.status == 200:
                     data = await resp.json()
-                    return len(data) > 0
+                    # DonutSMP returns balance under data.balance (adjust key if needed)
+                    balance = data.get("balance") or data.get("money") or data.get("coins")
+                    if balance is None:
+                        logger.error(f"DonutSMP API: no balance key in response for {ign}: {data}")
+                        return None
+                    return float(balance)
                 else:
-                    logger.error(f"DonutSMP API error: {resp.status} - {await resp.text()}")
-                    return False
+                    logger.error(f"DonutSMP API error for {ign}: {resp.status} - {await resp.text()}")
+                    return None
         except Exception as e:
-            logger.error(f"DonutSMP API request failed: {e}")
-            return False
+            logger.error(f"DonutSMP API request failed for {ign}: {e}")
+            return None
+
+
+def parse_price(price_str: str) -> float | None:
+    """
+    Convert price strings like '500k', '1.5m', '10000' to a float.
+    Returns None if the string can't be parsed.
+    """
+    price_str = price_str.strip().lower().replace(",", "")
+    try:
+        if price_str.endswith("k"):
+            return float(price_str[:-1]) * 1_000
+        elif price_str.endswith("m"):
+            return float(price_str[:-1]) * 1_000_000
+        elif price_str.endswith("b"):
+            return float(price_str[:-1]) * 1_000_000_000
+        else:
+            return float(price_str)
+    except (ValueError, AttributeError):
+        return None
 
 # ── Background Payment Monitor ────────────────────────────────────────
 async def monitor_payment(order_id: str, db, guild_id: int, buyer_ign: str, receiver_ign: str,
                           amount: str, buyer_id: int, build: dict, modal_data: dict, bot):
     """
-    Poll the DonutSMP API every 10 seconds for up to 30 minutes.
-    If payment is found, create the ticket and log to payment channel.
+    Poll the DonutSMP /v1/stats/{ign} endpoint every 10 seconds for up to 30 minutes.
+    Payment is confirmed when the receiver's balance increases by >= the order price.
     """
     start_time = datetime.now(timezone.utc)
     timeout = timedelta(minutes=30)
     check_interval = 10
 
+    # Parse the expected payment amount once
+    expected_amount = parse_price(amount)
+    if expected_amount is None:
+        logger.error(f"monitor_payment: could not parse price '{amount}' for order {order_id}. Aborting monitor.")
+        db["building_orders"].update_one(
+            {"_id": ObjectId(order_id)},
+            {"$set": {"payment_status": "error", "payment_error": f"Could not parse price: {amount}"}}
+        )
+        return
+
+    # Snapshot the receiver's balance before we start watching
+    baseline_balance = await get_player_balance(receiver_ign)
+    if baseline_balance is None:
+        logger.error(f"monitor_payment: could not fetch baseline balance for {receiver_ign}. Aborting monitor.")
+        db["building_orders"].update_one(
+            {"_id": ObjectId(order_id)},
+            {"$set": {"payment_status": "error", "payment_error": "Could not reach DonutSMP API"}}
+        )
+        return
+
+    logger.info(
+        f"monitor_payment: order={order_id} receiver={receiver_ign} "
+        f"baseline={baseline_balance} expected={expected_amount}"
+    )
+
     while (datetime.now(timezone.utc) - start_time) < timeout:
-        paid = await check_payment_via_api(receiver_ign, buyer_ign, amount)
-        if paid:
+        await asyncio.sleep(check_interval)
+        current_balance = await get_player_balance(receiver_ign)
+        if current_balance is None:
+            # API temporarily unreachable — keep trying
+            continue
+
+        gained = current_balance - baseline_balance
+        logger.debug(f"monitor_payment: order={order_id} current={current_balance} gained={gained}")
+
+        if gained >= expected_amount:
             # Payment confirmed
             db["building_orders"].update_one(
                 {"_id": ObjectId(order_id)},
@@ -122,7 +174,6 @@ async def monitor_payment(order_id: str, db, guild_id: int, buyer_ign: str, rece
                 return
             await create_build_ticket_from_modal(bot, guild, buyer, build, modal_data, receiver_ign, amount)
             return
-        await asyncio.sleep(check_interval)
 
     # Expired
     db["building_orders"].update_one(
