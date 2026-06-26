@@ -47,6 +47,7 @@ async def get_player_balance(ign: str) -> float | None:
     """
     Fetch the current in-game balance for a player from the DonutSMP API.
     Endpoint: GET /v1/stats/{ign}
+    The API returns text/plain (not JSON), so we read raw text and parse it.
     Returns the balance as a float, or None on error.
     """
     url = f"{DONUTSMP_API_URL}/v1/stats/{ign}"
@@ -56,17 +57,40 @@ async def get_player_balance(ign: str) -> float | None:
     async with aiohttp.ClientSession() as session:
         try:
             async with session.get(url, headers=headers, timeout=10) as resp:
-                if resp.status == 200:
-                    data = await resp.json()
-                    # DonutSMP returns balance under data.balance (adjust key if needed)
-                    balance = data.get("balance") or data.get("money") or data.get("coins")
-                    if balance is None:
-                        logger.error(f"DonutSMP API: no balance key in response for {ign}: {data}")
-                        return None
-                    return float(balance)
-                else:
-                    logger.error(f"DonutSMP API error for {ign}: {resp.status} - {await resp.text()}")
+                raw = await resp.text()
+                if resp.status != 200:
+                    logger.error(f"DonutSMP API error for {ign}: {resp.status} - {raw}")
                     return None
+
+                # Try JSON first (in case the API ever changes content-type)
+                import json as _json
+                try:
+                    data = _json.loads(raw)
+                    balance = data.get("money") or data.get("balance") or data.get("coins")
+                    if balance is not None:
+                        return float(balance)
+                except (_json.JSONDecodeError, AttributeError):
+                    pass
+
+                # Plain-text format: "key: value\nkey: value\n..."
+                # e.g. "money: 1234567.89\nkills: 5\n..."
+                for line in raw.splitlines():
+                    line = line.strip()
+                    if not line:
+                        continue
+                    for key in ("money", "balance", "coins"):
+                        if line.lower().startswith(key):
+                            # strip the key and any separators (: = space)
+                            value_part = line[len(key):].lstrip(":= \t")
+                            # strip commas and whitespace
+                            value_part = value_part.replace(",", "").strip()
+                            try:
+                                return float(value_part)
+                            except ValueError:
+                                pass
+
+                logger.error(f"DonutSMP API: could not find money in response for {ign}. Raw: {raw!r}")
+                return None
         except Exception as e:
             logger.error(f"DonutSMP API request failed for {ign}: {e}")
             return None
