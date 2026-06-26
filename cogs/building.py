@@ -485,6 +485,110 @@ async def create_build_ticket_from_modal(bot, guild, buyer, build, modal_data, r
     except Exception as e:
         logger.error(f"Error posting to builder orders channel: {e}")
 
+# ── Custom Build Ticket Creation (immediate, no payment yet) ─────────
+async def create_custom_build_ticket(bot, guild, buyer, build, modal_data):
+    """
+    Opens a ticket channel immediately for a Custom Build order.
+    No payment is required yet — status is 'unpaid' until staff run /build money.
+    The channel shows a "Quote Pending" banner and staff instructions.
+    """
+    db = bot.db
+    cfg = get_guild_config(db, guild.id)
+
+    trusted_staff_name = cfg.get("TRUSTED_STAFF_ROLE")
+    trusted_staff = discord.utils.get(guild.roles, name=trusted_staff_name) if trusted_staff_name else None
+    if not trusted_staff:
+        logger.error(f"create_custom_build_ticket: Trusted Staff role not found for guild {guild.id}")
+        return
+
+    confirmation_role_id = cfg.get("BUILD_TICKET_PING_ROLE_ID")
+    confirmation_role = guild.get_role(confirmation_role_id) if confirmation_role_id else None
+    if not confirmation_role:
+        confirmation_role = discord.utils.get(guild.roles, name="295")
+    if not confirmation_role:
+        logger.error(f"create_custom_build_ticket: Confirmation role not found for guild {guild.id}")
+        return
+
+    t1_role = guild.get_role(cfg.get("BUILDER_T1_ROLE_ID")) if cfg.get("BUILDER_T1_ROLE_ID") else None
+    t2_role = guild.get_role(cfg.get("BUILDER_T2_ROLE_ID")) if cfg.get("BUILDER_T2_ROLE_ID") else None
+    t3_role = guild.get_role(cfg.get("BUILDER_T3_ROLE_ID")) if cfg.get("BUILDER_T3_ROLE_ID") else None
+
+    cat = discord.utils.get(guild.categories, name="Building")
+    if not cat:
+        cat = await guild.create_category("Building")
+        await cat.set_permissions(guild.default_role, read_messages=False)
+
+    overwrites = {
+        guild.default_role: discord.PermissionOverwrite(read_messages=False),
+        # Buyer can read but NOT send messages until price is set and paid
+        buyer: discord.PermissionOverwrite(read_messages=True, send_messages=False),
+        trusted_staff: discord.PermissionOverwrite(read_messages=True, send_messages=True),
+        confirmation_role: discord.PermissionOverwrite(read_messages=True, send_messages=True),
+    }
+    if t1_role: overwrites[t1_role] = discord.PermissionOverwrite(read_messages=True, send_messages=True)
+    if t2_role: overwrites[t2_role] = discord.PermissionOverwrite(read_messages=True, send_messages=True)
+    if t3_role: overwrites[t3_role] = discord.PermissionOverwrite(read_messages=True, send_messages=True)
+
+    channel = await guild.create_text_channel(
+        name=f"build-{buyer.name.lower()}",
+        category=cat,
+        overwrites=overwrites,
+        topic=(
+            f"Build: {build['name']} | Buyer: {buyer.name} | "
+            f"IGN: {modal_data['ign']} | Region: {modal_data['region']} | "
+            f"Farm: {modal_data['farm_name']}"
+        )
+    )
+
+    # Update the order document with the ticket channel and set status to unpaid
+    db["building_orders"].update_one(
+        {"guild_id": guild.id, "buyer_id": buyer.id, "build_id": build["id"],
+         "payment_status": "pending"},
+        {"$set": {
+            "ticket_channel_id": channel.id,
+            "status": "unpaid",
+            "builder_id": None,
+            "order_message_id": None,
+        }},
+        upsert=False
+    )
+
+    # Send the "Quote Pending" info embed visible to buyer and staff
+    info_embed = discord.Embed(
+        title="🪄 Custom Build — Quote Pending",
+        description=(
+            f"Hey {buyer.mention}! Your custom build request has been received.\n\n"
+            f"**IGN:** `{modal_data['ign']}`\n"
+            f"**Region:** `{modal_data['region']}`\n"
+            f"**Farm Name:** `{modal_data['farm_name']}`\n\n"
+            f"⏳ A staff member will review your request and set a price using `/build money`.\n"
+            f"Once the price is set you will be pinged with a 30-minute payment window."
+        ),
+        color=0xf1c40f,
+        timestamp=datetime.now(timezone.utc)
+    )
+    info_embed.set_footer(text="Staff: use /build money to set the price and start the countdown.")
+    await channel.send(embed=info_embed)
+
+    close_view = TicketView()
+    await channel.send("**Staff Controls**", view=close_view)
+
+    await channel.send(
+        f"{confirmation_role.mention} New **Custom Build** ticket opened — please quote a price!",
+        delete_after=10
+    )
+
+    try:
+        await buyer.send(
+            f"✅ Your custom build ticket has been created: {channel.mention}\n"
+            f"Staff will set a price shortly — you'll be pinged once it's ready."
+        )
+    except discord.Forbidden:
+        pass
+
+    logger.info(f"create_custom_build_ticket: opened #{channel.name} ({channel.id}) for {buyer} in guild {guild.id}")
+
+
 # ── Modals ─────────────────────────────────────────────────────────────
 class BuildOrderModal(discord.ui.Modal, title="Place a Build Order"):
     def __init__(self, build: dict):
@@ -536,31 +640,45 @@ class BuildOrderModal(discord.ui.Modal, title="Place a Build Order"):
         result = db["building_orders"].insert_one(order_doc)
         order_id = result.inserted_id
 
-        asyncio.create_task(
-            monitor_payment(
-                str(order_id),
-                db,
-                interaction.guild.id,
-                ign,
-                receiver_ign,
-                amount,
-                interaction.user.id,
-                build,
-                {"ign": ign, "region": region, "farm_name": farm_name},
-                interaction.client
-            )
-        )
+        is_custom = parse_price(amount) is None  # "Quote Pending" → no numeric price
 
-        if parse_price(amount) is not None:
+        if is_custom:
+            # Custom Build: open the ticket immediately so staff can quote a price.
+            # monitor_payment is NOT started — /build money handles the countdown later.
             await interaction.response.send_message(
-                f"✅ Order placed! Please pay **{amount}** to in‑game player **{receiver_ign}** within 30 minutes.\n"
-                f"The bot will automatically open your ticket once payment is confirmed.\n\n"
+                f"✅ Custom build request submitted! Your ticket is being opened now.\n"
+                f"Staff will review and set a price shortly.\n\n"
                 f"**IGN:** {ign}\n**Region:** {region}\n**Farm:** {farm_name}",
                 ephemeral=True
             )
+            asyncio.create_task(
+                create_custom_build_ticket(
+                    interaction.client,
+                    interaction.guild,
+                    interaction.user,
+                    build,
+                    {"ign": ign, "region": region, "farm_name": farm_name},
+                )
+            )
         else:
+            # Regular priced build: wait for payment before opening a ticket.
+            asyncio.create_task(
+                monitor_payment(
+                    str(order_id),
+                    db,
+                    interaction.guild.id,
+                    ign,
+                    receiver_ign,
+                    amount,
+                    interaction.user.id,
+                    build,
+                    {"ign": ign, "region": region, "farm_name": farm_name},
+                    interaction.client
+                )
+            )
             await interaction.response.send_message(
-                f"✅ Order placed! Staff will reach out to confirm your price and payment.\n\n"
+                f"✅ Order placed! Please pay **{amount}** to in‑game player **{receiver_ign}** within 30 minutes.\n"
+                f"The bot will automatically open your ticket once payment is confirmed.\n\n"
                 f"**IGN:** {ign}\n**Region:** {region}\n**Farm:** {farm_name}",
                 ephemeral=True
             )
@@ -876,7 +994,13 @@ class Building(commands.Cog):
                     )
             elif order["status"] in ("unpaid", "confirmed", "claimed"):
                 if order["status"] == "unpaid":
-                    view = PaymentView(order["buyer_id"], order["ticket_channel_id"], confirmation_role)
+                    # Custom builds awaiting a price have a non-numeric price ("Quote Pending").
+                    # They use TicketView (staff controls only) — PaymentView would be wrong here
+                    # because there's no price set yet. Regular priced unpaid orders use PaymentView.
+                    if parse_price(str(order.get("price", ""))) is None:
+                        view = TicketView()
+                    else:
+                        view = PaymentView(order["buyer_id"], order["ticket_channel_id"], confirmation_role)
                     self.bot.add_view(view)
                 else:
                     view = BuilderClaimView(order)
@@ -1085,6 +1209,13 @@ class Building(commands.Cog):
             return await interaction.response.send_message(f"❌ This order is already `{order['status']}`.", ephemeral=True)
         if order["status"] not in ("confirmed", "unpaid"):
             return await interaction.response.send_message("❌ This order cannot be claimed yet — payment has not been confirmed.", ephemeral=True)
+        # Extra guard: unpaid orders with a non-numeric or unset price are custom builds still awaiting a quote
+        if order["status"] == "unpaid" and parse_price(str(order.get("price", ""))) is None:
+            return await interaction.response.send_message(
+                "❌ This custom build hasn't been paid yet — use `/build money` to set a price first, "
+                "then confirm payment before claiming.",
+                ephemeral=True
+            )
         if order.get("builder_id"):
             claimer = interaction.guild.get_member(order["builder_id"])
             name = claimer.mention if claimer else f"<@{order['builder_id']}>"
