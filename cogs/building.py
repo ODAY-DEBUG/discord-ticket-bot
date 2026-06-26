@@ -43,7 +43,6 @@ def has_cmd_perm(interaction: discord.Interaction, command_name: str) -> bool:
     return False
 
 # ── API Payment Check ──────────────────────────────────────────────────
-
 async def get_player_balance(ign: str) -> float | None:
     """
     Fetch the current in-game balance for a player from the DonutSMP API.
@@ -55,33 +54,21 @@ async def get_player_balance(ign: str) -> float | None:
     headers = {}
     if DONUTSMP_API_KEY:
         headers["Authorization"] = f"Bearer {DONUTSMP_API_KEY}"
-
     async with aiohttp.ClientSession() as session:
         try:
             async with session.get(url, headers=headers, timeout=10) as resp:
                 raw = await resp.text()
-
                 if resp.status != 200:
-                    logger.error(
-                        f"DonutSMP API error for {ign}: {resp.status} - {raw}"
-                    )
+                    logger.error(f"DonutSMP API error for {ign}: {resp.status} - {raw}")
                     return None
 
                 # Try JSON first (in case the API ever changes content-type)
                 import json as _json
-
                 try:
                     data = _json.loads(raw)
-                    result = data.get("result", data)  # fall back to data itself if no "result" key
-                    balance = (
-                        result.get("money")
-                        or result.get("balance")
-                        or result.get("coins")
-                    )
-
+                    balance = data.get("money") or data.get("balance") or data.get("coins")
                     if balance is not None:
                         return float(balance)
-
                 except (_json.JSONDecodeError, AttributeError):
                     pass
 
@@ -91,29 +78,22 @@ async def get_player_balance(ign: str) -> float | None:
                     line = line.strip()
                     if not line:
                         continue
-
                     for key in ("money", "balance", "coins"):
                         if line.lower().startswith(key):
                             # strip the key and any separators (: = space)
                             value_part = line[len(key):].lstrip(":= \t")
-
                             # strip commas and whitespace
                             value_part = value_part.replace(",", "").strip()
-
                             try:
                                 return float(value_part)
                             except ValueError:
                                 pass
 
-                logger.error(
-                    f"DonutSMP API: could not find money in response for {ign}. Raw: {raw!r}"
-                )
+                logger.error(f"DonutSMP API: could not find money in response for {ign}. Raw: {raw!r}")
                 return None
-
         except Exception as e:
             logger.error(f"DonutSMP API request failed for {ign}: {e}")
             return None
-
 
 
 def parse_price(price_str: str) -> float | None:
@@ -193,7 +173,7 @@ async def monitor_payment(order_id: str, db, guild_id: int, buyer_ign: str, rece
                 cfg = get_guild_config(db, guild.id)
                 log_channel_id = cfg.get("PAYMENT_LOG_CHANNEL_ID")
                 if log_channel_id:
-                    log_channel = guild.get_channel(log_channel_id)
+                    log_channel = guild.get_channel(int(log_channel_id))
                     if log_channel:
                         log_embed = discord.Embed(
                             title="✅ Payment Received",
@@ -305,11 +285,10 @@ async def create_build_ticket_from_modal(bot, guild, buyer, build, modal_data, r
     )
     pay_embed.set_footer(text=f"Order ID: {channel.id}")
 
-    view = PaymentView(buyer.id, channel.id, confirmation_role)
-    await channel.send(embed=pay_embed, view=view)
+    await channel.send(embed=pay_embed)
 
     close_view = TicketView()
-    await channel.send("\n**Staff Controls**", view=close_view)
+    await channel.send("**Staff Controls**", view=close_view)
 
     await channel.send(f"{confirmation_role.mention} A new build ticket has been opened!", delete_after=10)
     if t3_role:
@@ -470,10 +449,32 @@ class ConfirmPaymentView(discord.ui.View):
                 return await interaction.response.send_message("❌ I lack permission to update the buyer.", ephemeral=True)
 
         db = interaction.client.db
+        order = db["building_orders"].find_one({"ticket_channel_id": self.channel_id})
         db["building_orders"].update_one({"ticket_channel_id": self.channel_id}, {"$set": {"status": "confirmed"}})
 
         success_embed = discord.Embed(title="✅ Payment Confirmed", description="The buyer can now talk. Please proceed with the build.", color=0x2ecc71)
         await interaction.response.edit_message(embed=success_embed, view=None)
+
+        # Send payment log
+        if order:
+            try:
+                cfg = db["bot_config"].find_one({"guild_id": interaction.guild.id}) or {}
+                log_channel_id = cfg.get("PAYMENT_LOG_CHANNEL_ID")
+                if log_channel_id:
+                    log_channel = interaction.guild.get_channel(int(log_channel_id))
+                    if log_channel:
+                        log_embed = discord.Embed(
+                            title="✅ Payment Received (Manual)",
+                            description=f"**{order.get('ign', 'Unknown')}** paid **{order.get('price', 'Unknown')}** — confirmed by {interaction.user.mention}",
+                            color=0x2ecc71,
+                            timestamp=datetime.now(timezone.utc)
+                        )
+                        log_embed.add_field(name="Build", value=order.get("build_name", "Unknown"), inline=True)
+                        log_embed.add_field(name="Buyer", value=f"<@{order['buyer_id']}>", inline=True)
+                        log_embed.set_footer(text=f"Ticket Channel: {self.channel_id}")
+                        await log_channel.send(embed=log_embed)
+            except Exception as e:
+                logger.error(f"Failed to send manual payment log: {e}")
 
         try:
             await post_order_to_builder_channel(interaction, self.channel_id)
@@ -733,14 +734,38 @@ class Building(commands.Cog):
         order = db["building_orders"].find_one({"ticket_channel_id": interaction.channel.id})
         if not order:
             return await interaction.response.send_message("❌ This is not a valid build ticket channel.", ephemeral=True)
-        if order["status"] != "unpaid":
-            return await interaction.response.send_message("❌ This order is not awaiting payment.", ephemeral=True)
+        if order["status"] == "confirmed":
+            return await interaction.response.send_message("❌ This order is already confirmed.", ephemeral=True)
+        if order["status"] in ("completed", "cancelled"):
+            return await interaction.response.send_message(f"❌ This order is already `{order['status']}` and cannot be paid.", ephemeral=True)
         buyer = interaction.guild.get_member(order["buyer_id"])
         if buyer:
             overwrites = interaction.channel.overwrites_for(buyer)
             overwrites.send_messages = True
             await interaction.channel.set_permissions(buyer, overwrite=overwrites)
         db["building_orders"].update_one({"ticket_channel_id": interaction.channel.id}, {"$set": {"status": "confirmed"}})
+
+        # Send payment log
+        try:
+            cfg = db["bot_config"].find_one({"guild_id": interaction.guild.id}) or {}
+            log_channel_id = cfg.get("PAYMENT_LOG_CHANNEL_ID")
+            if log_channel_id:
+                log_channel = interaction.guild.get_channel(int(log_channel_id))
+                if log_channel:
+                    log_embed = discord.Embed(
+                        title="✅ Payment Received (Staff Override)",
+                        description=f"**{order.get('ign', 'Unknown')}** — payment manually confirmed by {interaction.user.mention}",
+                        color=0x2ecc71,
+                        timestamp=datetime.now(timezone.utc)
+                    )
+                    log_embed.add_field(name="Build", value=order.get("build_name", "Unknown"), inline=True)
+                    log_embed.add_field(name="Buyer", value=f"<@{order['buyer_id']}>", inline=True)
+                    log_embed.add_field(name="Price", value=order.get("price", "Unknown"), inline=True)
+                    log_embed.set_footer(text=f"Ticket Channel: {interaction.channel.id}")
+                    await log_channel.send(embed=log_embed)
+        except Exception as e:
+            logger.error(f"Failed to send paid log: {e}")
+
         embed = discord.Embed(title="✅ Payment Manually Confirmed", description="Order is now confirmed and buyer can speak.", color=0x2ecc71)
         await interaction.response.send_message(embed=embed)
         try:
@@ -768,8 +793,14 @@ class Building(commands.Cog):
         order = db["building_orders"].find_one({"ticket_channel_id": interaction.channel.id})
         if not order:
             return await interaction.response.send_message("❌ This is not a valid build ticket channel.", ephemeral=True)
+        if order["status"] in ("completed", "cancelled"):
+            return await interaction.response.send_message(f"❌ This order is already `{order['status']}`.", ephemeral=True)
+        if order["status"] not in ("confirmed", "unpaid"):
+            return await interaction.response.send_message("❌ This order cannot be claimed yet — payment has not been confirmed.", ephemeral=True)
         if order.get("builder_id"):
-            return await interaction.response.send_message("❌ This order is already claimed.", ephemeral=True)
+            claimer = interaction.guild.get_member(order["builder_id"])
+            name = claimer.mention if claimer else f"<@{order['builder_id']}>"
+            return await interaction.response.send_message(f"❌ This order is already claimed by {name}.", ephemeral=True)
         await interaction.channel.set_permissions(interaction.user, read_messages=True, send_messages=True)
         db["building_orders"].update_one({"ticket_channel_id": interaction.channel.id}, {"$set": {"builder_id": interaction.user.id, "status": "claimed"}})
         await interaction.response.send_message(f"🔨 {interaction.user.mention} has claimed this build order.")
@@ -782,6 +813,12 @@ class Building(commands.Cog):
         order = db["building_orders"].find_one({"ticket_channel_id": interaction.channel.id})
         if not order:
             return await interaction.response.send_message("❌ This is not a valid build ticket channel.", ephemeral=True)
+        if order["status"] == "completed":
+            return await interaction.response.send_message("❌ This order is already marked as completed.", ephemeral=True)
+        if order["status"] == "cancelled":
+            return await interaction.response.send_message("❌ This order was cancelled and cannot be completed.", ephemeral=True)
+        if order["status"] not in ("claimed", "confirmed"):
+            return await interaction.response.send_message("❌ This order must be claimed before it can be completed.", ephemeral=True)
         db["building_orders"].update_one({"ticket_channel_id": interaction.channel.id}, {"$set": {"status": "completed"}})
         embed = discord.Embed(title="🎉 Build Completed", description="This order has been marked as completed. Closing in 5 seconds...", color=0x2ecc71)
         await interaction.response.send_message(embed=embed)
@@ -798,6 +835,10 @@ class Building(commands.Cog):
         order = db["building_orders"].find_one({"ticket_channel_id": interaction.channel.id})
         if not order:
             return await interaction.response.send_message("❌ This is not a valid build ticket channel.", ephemeral=True)
+        if order["status"] == "cancelled":
+            return await interaction.response.send_message("❌ This order is already cancelled.", ephemeral=True)
+        if order["status"] == "completed":
+            return await interaction.response.send_message("❌ This order is already completed and cannot be cancelled.", ephemeral=True)
         db["building_orders"].update_one({"ticket_channel_id": interaction.channel.id}, {"$set": {"status": "cancelled"}})
         await interaction.response.send_message("❌ Ticket cancelled. Closing in 3 seconds...")
         await asyncio.sleep(3)
