@@ -66,7 +66,8 @@ async def get_player_balance(ign: str) -> float | None:
                 import json as _json
                 try:
                     data = _json.loads(raw)
-                    balance = data.get("money") or data.get("balance") or data.get("coins")
+		    result = data.get("result", data)  # fall back to data itself if no "result" key
+		    balance = result.get("money") or result.get("balance") or result.get("coins")
                     if balance is not None:
                         return float(balance)
                 except (_json.JSONDecodeError, AttributeError):
