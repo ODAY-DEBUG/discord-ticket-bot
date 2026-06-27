@@ -3,6 +3,7 @@ from discord.ext import commands
 from discord import app_commands
 import os
 import asyncio
+import subprocess, sys, pathlib
 import threading
 from dotenv import load_dotenv
 from db import get_bot_token, get_db
@@ -35,6 +36,7 @@ COGS = [
     'cogs.applications',
     'cogs.staff_utils',
     'cogs.afk',
+    'cogs.mcpay',
 ]
 
 class Bot(commands.Bot):
@@ -53,6 +55,22 @@ class Bot(commands.Bot):
         # Bind the global tree error handler
         self.tree.on_error = self.on_tree_error
 
+        mc_bot_path = pathlib.Path(__file__).parent / "mc-bot" / "index.js"
+        if mc_bot_path.exists():
+            mc_env = os.environ.copy()
+            mc_env["MC_BOT_PORT"] = "3001"
+
+            mc_proc = subprocess.Popen(
+                ["node", str(mc_bot_path)],
+                env=mc_env,
+                stdout=sys.stdout,
+                stderr=sys.stderr,
+            )
+
+            print(f"✅ MC bot subprocess started (PID {mc_proc.pid})")
+        else:
+            print("⚠️  mc-bot/index.js not found — MC bot not started")
+
         for cog in COGS:
             try:
                 await self.load_extension(cog)
@@ -65,20 +83,34 @@ class Bot(commands.Bot):
             port = int(os.getenv("PORT", 5000))
             print(f"🌐 Starting Flask Dashboard on 0.0.0.0:{port}...")
             try:
-                flask_app.run(host='0.0.0.0', port=port, debug=False, use_reloader=False)
+                flask_app.run(
+                    host='0.0.0.0',
+                    port=port,
+                    debug=False,
+                    use_reloader=False
+                )
             except Exception as e:
                 print(f"❌ Flask failed to start: {e}")
 
         threading.Thread(target=run_web, daemon=True).start()
 
     # --- Global Error Handler ---
-    async def on_tree_error(self, interaction: discord.Interaction, error: app_commands.AppCommandError):
+    async def on_tree_error(
+        self,
+        interaction: discord.Interaction,
+        error: app_commands.AppCommandError
+    ):
         if isinstance(error, app_commands.CheckFailure):
             msg = str(error)
         else:
             import traceback
-            traceback.print_exception(type(error), error, error.__traceback__)
+            traceback.print_exception(
+                type(error),
+                error,
+                error.__traceback__
+            )
             msg = "❌ An unexpected error occurred while running this command."
+
         try:
             if interaction.response.is_done():
                 await interaction.followup.send(msg, ephemeral=True)
@@ -86,6 +118,7 @@ class Bot(commands.Bot):
                 await interaction.response.send_message(msg, ephemeral=True)
         except discord.HTTPException:
             pass
+
 
 bot = Bot(command_prefix='!', intents=intents, help_command=None)
 

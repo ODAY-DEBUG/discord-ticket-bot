@@ -870,5 +870,60 @@ def test_mongodb_route():
         return jsonify({"error": str(e)}), 500
 
 
+MC_BOT_URL = os.getenv("MC_BOT_URL", "http://127.0.0.1:3001")
+
+
+@app.route("/mc-login")
+def mc_login():
+    if "access_token" not in session:
+        return redirect("/")
+    return render_template("mc_login.html")
+
+
+@app.route("/mc-status")
+def mc_status():
+    if "access_token" not in session:
+        return jsonify({"error": "Unauthorized"}), 401
+    try:
+        r = requests.get(f"{MC_BOT_URL}/status", timeout=5)
+        return jsonify(r.json())
+    except Exception as e:
+        return jsonify({"status": "error", "error": f"MC bot unreachable: {e}"}), 503
+
+
+@app.route("/mc-start-login", methods=["POST"])
+def mc_start_login():
+    if "access_token" not in session:
+        return jsonify({"error": "Unauthorized"}), 401
+    try:
+        r = requests.post(f"{MC_BOT_URL}/start-login", timeout=10)
+        return jsonify(r.json())
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 503
+
+
+@app.route("/mc-reconnect", methods=["POST"])
+def mc_reconnect():
+    """Called when the user clicks 'I Authorized' after Discord DM auth."""
+    if "access_token" not in session:
+        return jsonify({"error": "Unauthorized"}), 401
+    try:
+        r = requests.post(f"{MC_BOT_URL}/reconnect", timeout=10)
+        return jsonify(r.json())
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 503
+
+
+@app.route("/mc-logout", methods=["POST"])
+def mc_logout():
+    if "access_token" not in session:
+        return jsonify({"error": "Unauthorized"}), 401
+    try:
+        r = requests.post(f"{MC_BOT_URL}/logout", timeout=10)
+        return jsonify(r.json())
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 503
+
+
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.getenv("PORT", 5000)), debug=True)
