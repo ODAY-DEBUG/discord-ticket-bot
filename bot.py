@@ -4,6 +4,7 @@ from discord import app_commands
 import os
 import asyncio
 import subprocess, sys, pathlib
+import shutil
 import threading
 from dotenv import load_dotenv
 from db import get_bot_token, get_db
@@ -55,21 +56,26 @@ class Bot(commands.Bot):
         # Bind the global tree error handler
         self.tree.on_error = self.on_tree_error
 
+        # ── Spawn MC bot subprocess ──────────────────────────────────────────
         mc_bot_path = pathlib.Path(__file__).parent / "mc-bot" / "index.js"
-        if mc_bot_path.exists():
+        node_path = shutil.which("node")
+
+        if not node_path:
+            print("⚠️  'node' not found in PATH — MC bot not started. Check nixpacks.toml.")
+        elif not mc_bot_path.exists():
+            print("⚠️  mc-bot/index.js not found — MC bot not started.")
+        else:
             mc_env = os.environ.copy()
             mc_env["MC_BOT_PORT"] = "3001"
 
             mc_proc = subprocess.Popen(
-                ["node", str(mc_bot_path)],
+                [node_path, str(mc_bot_path)],
                 env=mc_env,
                 stdout=sys.stdout,
                 stderr=sys.stderr,
             )
 
             print(f"✅ MC bot subprocess started (PID {mc_proc.pid})")
-        else:
-            print("⚠️  mc-bot/index.js not found — MC bot not started")
 
         for cog in COGS:
             try:
@@ -77,6 +83,8 @@ class Bot(commands.Bot):
                 print(f'✅ {cog} loaded!')
             except Exception as e:
                 print(f'❌ Failed to load {cog}: {e}')
+
+        # rest of your code...
 
         # --- Start Web Dashboard in Background ---
         def run_web():
