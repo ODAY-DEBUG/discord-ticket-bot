@@ -37,8 +37,9 @@ async function clearToken() {
 }
 
 // ── State ─────────────────────────────────────────────────────────────────────
-let bot      = null
-let botReady = false
+let bot              = null
+let botReady         = false
+let manualDisconnect = false  // true after /logout — suppresses auto-reconnect
 
 // status: disconnected | awaiting_auth | awaiting_discord_auth | connecting | ready | error
 let state = { status: 'disconnected', code: null, url: null, error: null }
@@ -118,6 +119,11 @@ function startBot(cachedToken = null) {
   bot.on('end', (reason) => {
     console.log(`[MC-BOT] Disconnected: ${reason}`)
     botReady = false
+    if (manualDisconnect) {
+      console.log('[MC-BOT] Manual disconnect — not reconnecting')
+      setState({ status: 'disconnected', code: null, url: null, error: null })
+      return
+    }
     if (state.status !== 'awaiting_discord_auth') {
       setState({ status: 'disconnected', code: null, url: null, error: null })
       scheduleReconnect(15_000)
@@ -132,6 +138,7 @@ app.get('/status', (_req, res) => res.json(state))
 // Start fresh login (device-code flow)
 app.post('/start-login', async (_req, res) => {
   if (botReady) return res.json({ ok: true, message: 'Already connected' })
+  manualDisconnect = false
   await clearToken()
   startBot(null)
   res.json({ ok: true })
@@ -153,6 +160,7 @@ app.post('/reconnect', (_req, res) => {
 // Logout — clear token and disconnect
 app.post('/logout', async (_req, res) => {
   if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null }
+  manualDisconnect = true
   await clearToken()
   try { bot?.end() } catch(_) {}
   bot      = null
