@@ -6,50 +6,39 @@
   <title>MC Bot Login</title>
   <style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-
     body {
       min-height: 100vh;
       background: #0f1117;
       color: #e2e8f0;
       font-family: 'Segoe UI', system-ui, sans-serif;
-      display: flex;
-      align-items: center;
-      justify-content: center;
+      display: flex; align-items: center; justify-content: center;
       padding: 24px;
     }
-
     .card {
-      background: #1a1d27;
-      border: 1px solid #2d3148;
-      border-radius: 16px;
-      padding: 40px 36px;
-      width: 100%;
-      max-width: 480px;
-      text-align: center;
+      background: #1a1d27; border: 1px solid #2d3148;
+      border-radius: 16px; padding: 40px 36px;
+      width: 100%; max-width: 480px; text-align: center;
     }
-
     .icon { font-size: 48px; margin-bottom: 16px; }
     h1 { font-size: 22px; font-weight: 700; margin-bottom: 8px; }
     .sub { color: #8b95a1; font-size: 14px; margin-bottom: 28px; line-height: 1.6; }
 
-    /* Status badge */
     .badge {
       display: inline-flex; align-items: center; gap: 8px;
       padding: 6px 16px; border-radius: 999px;
       font-size: 13px; font-weight: 600; margin-bottom: 24px;
     }
-    .badge.ready        { background:#14532d; color:#4ade80; }
-    .badge.connecting   { background:#1e3a5f; color:#60a5fa; }
-    .badge.awaiting_auth{ background:#3b2000; color:#fbbf24; }
+    .badge.ready               { background:#14532d; color:#4ade80; }
+    .badge.connecting          { background:#1e3a5f; color:#60a5fa; }
+    .badge.awaiting_auth       { background:#3b2000; color:#fbbf24; }
     .badge.awaiting_discord_auth { background:#3b1a5f; color:#c084fc; }
-    .badge.disconnected { background:#1f1f2e; color:#8b95a1; }
-    .badge.error        { background:#3b0a0a; color:#f87171; }
+    .badge.disconnected        { background:#1f1f2e; color:#8b95a1; }
+    .badge.error               { background:#3b0a0a; color:#f87171; }
 
     .dot { width:8px; height:8px; border-radius:50%; background:currentColor; }
     .dot.pulse { animation: pulse 1.4s ease-in-out infinite; }
     @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.25} }
 
-    /* Device code box */
     .code-box {
       background:#12141e; border:1px solid #2d3148;
       border-radius:12px; padding:20px; margin-bottom:20px;
@@ -63,14 +52,12 @@
     }
     .code-box a:hover { background:#4752c4; }
 
-    /* Discord auth box */
     .discord-box {
       background:#1a1040; border:1px solid #4c1d95;
       border-radius:12px; padding:20px; margin-bottom:20px;
     }
     .discord-box p { color:#c4b5fd; font-size:14px; line-height:1.6; margin-bottom:14px; }
 
-    /* Buttons */
     .btn {
       width:100%; padding:13px; border:none; border-radius:10px;
       font-size:15px; font-weight:600; cursor:pointer;
@@ -81,7 +68,8 @@
     .btn:hover:not(:disabled) { opacity:.85; }
     .btn-login     { background:#5865f2; color:#fff; }
     .btn-authorized{ background:#7c3aed; color:#fff; }
-    .btn-logout    { background:#2d3148; color:#e2e8f0; }
+    .btn-leave     { background:#2d3148; color:#e2e8f0; }
+    .btn-signout   { background:#3b0a0a; color:#f87171; }
 
     .hint { margin-top:20px; font-size:12px; color:#4b5563; line-height:1.7; }
   </style>
@@ -97,7 +85,6 @@
     <span id="badge-text">Checking…</span>
   </div>
 
-  <!-- Microsoft device code -->
   <div id="code-box" class="code-box" style="display:none">
     <p>Go to the link below and enter this code to sign in with Microsoft:</p>
     <div id="device-code" class="code">------</div>
@@ -106,7 +93,6 @@
     </a>
   </div>
 
-  <!-- Waiting for Discord auth -->
   <div id="discord-box" class="discord-box" style="display:none">
     <p>
       🔔 DonutSMP sent you a <strong>Discord DM</strong> asking to authorize this login.<br><br>
@@ -115,13 +101,13 @@
     <button class="btn btn-authorized" onclick="iAuthorized()">✅ I Authorized</button>
   </div>
 
-  <button id="btn-login"  class="btn btn-login"  onclick="startLogin()">🔗 Login with Microsoft</button>
-  <button id="btn-leave"    class="btn btn-leave"   onclick="leaveServer()" style="display:none">Leave Server</button>
-  <button id="btn-signout" class="btn btn-signout" onclick="fullLogout()"   style="display:none">Sign Out (clear token)</button>
+  <button id="btn-login"   class="btn btn-login"   onclick="startLogin()">🔗 Login with Microsoft</button>
+  <button id="btn-leave"   class="btn btn-leave"   onclick="leaveServer()" style="display:none">Leave Server</button>
+  <button id="btn-signout" class="btn btn-signout" onclick="fullLogout()"  style="display:none">Sign Out (clear token)</button>
 
   <p class="hint">
-    <strong>Leave Server</strong> — disconnects the bot but keeps your session saved.<br>
-    <strong>Sign Out</strong> — fully clears the token and requires a new Microsoft login.
+    <strong>Leave Server</strong> — disconnects but keeps your session saved, reconnects automatically.<br>
+    <strong>Sign Out</strong> — fully clears the token and requires a new Microsoft login next time.
   </p>
 </div>
 
@@ -145,25 +131,26 @@
     const btnLeave   = document.getElementById('btn-leave')
     const btnSignout = document.getElementById('btn-signout')
 
-    // Reset
-    badge.className = 'badge'
+    // Reset everything
+    badge.className        = 'badge'
     dot.classList.remove('pulse')
     codeBox.style.display    = 'none'
     discordBox.style.display = 'none'
     btnLogin.style.display   = 'block'
+    btnLogin.disabled        = false
     btnLeave.style.display   = 'none'
     btnSignout.style.display = 'none'
-    btnLogin.disabled        = false
 
     if (s.status === 'ready') {
       badge.classList.add('ready')
-      badgeTxt.textContent   = '● Connected'
-      btnLogin.style.display = 'none'
-      btnLogout.style.display= 'block'
+      badgeTxt.textContent     = '● Connected'
+      btnLogin.style.display   = 'none'
+      btnLeave.style.display   = 'block'
+      btnSignout.style.display = 'block'
 
     } else if (s.status === 'awaiting_auth') {
       badge.classList.add('awaiting_auth')
-      badgeTxt.textContent = 'Waiting for Microsoft login…'
+      badgeTxt.textContent  = 'Waiting for Microsoft login…'
       dot.classList.add('pulse')
       codeBox.style.display = 'block'
       document.getElementById('device-code').textContent = s.code || '------'
@@ -193,9 +180,7 @@
     }
   }
 
-  async function poll() {
-    applyStatus(await fetchStatus())
-  }
+  async function poll() { applyStatus(await fetchStatus()) }
 
   async function startLogin() {
     document.getElementById('btn-login').disabled = true
@@ -214,7 +199,7 @@
   }
 
   async function fullLogout() {
-    if (!confirm('This will clear your saved session and require a full Microsoft login next time. Continue?')) return
+    if (!confirm('This clears your saved session and requires a full Microsoft login next time. Continue?')) return
     await fetch('/mc-full-logout', { method: 'POST' })
     setTimeout(poll, 500)
   }
