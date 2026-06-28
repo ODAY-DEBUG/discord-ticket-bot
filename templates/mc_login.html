@@ -116,11 +116,12 @@
   </div>
 
   <button id="btn-login"  class="btn btn-login"  onclick="startLogin()">🔗 Login with Microsoft</button>
-  <button id="btn-logout" class="btn btn-logout" onclick="logout()" style="display:none">Disconnect Bot</button>
+  <button id="btn-leave"    class="btn btn-leave"   onclick="leaveServer()" style="display:none">Leave Server</button>
+  <button id="btn-signout" class="btn btn-signout" onclick="fullLogout()"   style="display:none">Sign Out (clear token)</button>
 
   <p class="hint">
-    The session is saved — the bot reconnects automatically after restarts.<br>
-    Click "Disconnect Bot" to log out and clear the saved session.
+    <strong>Leave Server</strong> — disconnects the bot but keeps your session saved.<br>
+    <strong>Sign Out</strong> — fully clears the token and requires a new Microsoft login.
   </p>
 </div>
 
@@ -141,7 +142,8 @@
     const codeBox    = document.getElementById('code-box')
     const discordBox = document.getElementById('discord-box')
     const btnLogin   = document.getElementById('btn-login')
-    const btnLogout  = document.getElementById('btn-logout')
+    const btnLeave   = document.getElementById('btn-leave')
+    const btnSignout = document.getElementById('btn-signout')
 
     // Reset
     badge.className = 'badge'
@@ -149,7 +151,8 @@
     codeBox.style.display    = 'none'
     discordBox.style.display = 'none'
     btnLogin.style.display   = 'block'
-    btnLogout.style.display  = 'none'
+    btnLeave.style.display   = 'none'
+    btnSignout.style.display = 'none'
     btnLogin.disabled        = false
 
     if (s.status === 'ready') {
@@ -205,8 +208,14 @@
     setTimeout(poll, 500)
   }
 
-  async function logout() {
+  async function leaveServer() {
     await fetch('/mc-logout', { method: 'POST' })
+    setTimeout(poll, 500)
+  }
+
+  async function fullLogout() {
+    if (!confirm('This will clear your saved session and require a full Microsoft login next time. Continue?')) return
+    await fetch('/mc-full-logout', { method: 'POST' })
     setTimeout(poll, 500)
   }
 

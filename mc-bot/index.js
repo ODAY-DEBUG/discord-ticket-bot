@@ -157,8 +157,19 @@ app.post('/reconnect', (_req, res) => {
   res.json({ ok: true })
 })
 
-// Logout — clear token and disconnect
+// Leave server — disconnect but keep token saved
 app.post('/logout', async (_req, res) => {
+  if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null }
+  manualDisconnect = true
+  try { bot?.end() } catch(_) {}
+  bot      = null
+  botReady = false
+  setState({ status: 'disconnected', code: null, url: null, error: null })
+  res.json({ ok: true })
+})
+
+// Full logout — disconnect AND clear token
+app.post('/full-logout', async (_req, res) => {
   if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null }
   manualDisconnect = true
   await clearToken()
