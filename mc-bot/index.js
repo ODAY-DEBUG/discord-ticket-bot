@@ -108,8 +108,16 @@ function scheduleReconnect(ms = 15000) {
   if (reconnectTimer) return
   reconnectTimer = setTimeout(async () => {
     reconnectTimer = null
+    // Always try to restore saved profiles — never trigger a fresh MS login
+    // on an automatic reconnect (the user didn't ask to re-authenticate)
     const hasProfiles = await restoreProfiles()
-    startBot(hasProfiles)
+    if (!hasProfiles) {
+      // No saved session at all — stay disconnected, don't spam MS device-code
+      console.log('[MC-BOT] No saved profiles to reconnect with — staying disconnected.')
+      setState({ status: 'disconnected', code: null, url: null, error: null })
+      return
+    }
+    startBot(true)
   }, ms)
 }
 
@@ -126,12 +134,12 @@ function startBot(hasProfiles = false) {
     profilesFolder: PROFILES_DIR,  // mineflayer reads/writes cached MS tokens here
   }
 
-  // If no cached profiles, trigger device-code flow
+  // Only set up device-code flow when we have NO saved session
+  // If hasProfiles is true, mineflayer will silently reuse the cached token
   if (!hasProfiles) {
     opts.onMsaCode = ({ user_code, verification_uri }) => {
       console.log(`[MC-BOT] 🔑 Device code: ${user_code}`)
       console.log(`[MC-BOT] 🔗 URL: ${verification_uri}`)
-      // Force state update — this is what the dashboard polls
       setState({
         status: 'awaiting_auth',
         code:   user_code,
@@ -139,6 +147,8 @@ function startBot(hasProfiles = false) {
         error:  null,
       })
     }
+  } else {
+    console.log('[MC-BOT] 🔄 Using cached MS token — no login required')
   }
 
   bot = mineflayer.createBot(opts)
@@ -172,13 +182,17 @@ function startBot(hasProfiles = false) {
     console.log(`[MC-BOT] Disconnected: ${reason}`)
     botReady = false
     if (manualDisconnect) {
+      // User explicitly left — stay disconnected, don't auto-reconnect
       setState({ status: 'disconnected', code: null, url: null, error: null })
       return
     }
-    if (state.status !== 'awaiting_discord_auth') {
-      setState({ status: 'disconnected', code: null, url: null, error: null })
-      scheduleReconnect(15000)
+    if (state.status === 'awaiting_discord_auth') {
+      // Don't reconnect — waiting for user to click "I Authorized"
+      return
     }
+    // Unexpected drop — schedule reconnect using saved MS profiles
+    setState({ status: 'disconnected', code: null, url: null, error: null })
+    scheduleReconnect(15000)
   })
 }
 
@@ -215,6 +229,8 @@ app.post('/reconnect', async (_req, res) => {
 app.post('/logout', async (_req, res) => {
   if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null }
   manualDisconnect = true
+  // Backup profiles to MongoDB before ending so they survive
+  await backupProfiles()
   try { bot?.end() } catch (_) {}
   bot      = null
   botReady = false
