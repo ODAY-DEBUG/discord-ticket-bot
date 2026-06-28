@@ -201,14 +201,18 @@ function startBot(hasProfiles = false) {
 app.get('/status', (_req, res) => res.json(state))
 
 // Fresh login — clears everything and starts device-code flow
-app.post('/start-login', async (_req, res) => {
-  if (botReady) return res.json({ ok: true, message: 'Already connected' })
+// Connect — reuse saved profiles if available, only do fresh MS login if none exist
+app.post("/start-login", async (_req, res) => {
+  if (botReady) return res.json({ ok: true, message: "Already connected" })
   manualDisconnect = false
-  await clearProfiles()
-  startBot(false)
-  // Give mineflayer ~2s to trigger onMsaCode, then respond
-  // so the frontend can start polling immediately
-  setTimeout(() => {}, 100)
+  const hasProfiles = await restoreProfiles()
+  if (hasProfiles) {
+    console.log("[MC-BOT] 🔄 Saved session found — reconnecting silently...")
+    startBot(true)
+  } else {
+    console.log("[MC-BOT] 🔑 No saved session — starting fresh MS login...")
+    startBot(false)
+  }
   res.json({ ok: true })
 })
 
