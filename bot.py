@@ -24,11 +24,7 @@ COGS = [
     'cogs.moderation',
     'cogs.giveaway',
     'cogs.sticky',
-    'cogs.tickets_base',
-    'cogs.tickets_bedrock',
-    'cogs.tickets_spawner',
     'cogs.building',            # new building system
-    'cogs.tickets_support',
     'cogs.reactionroles',
     'cogs.welcome',
     'cogs.automod',
@@ -38,6 +34,7 @@ COGS = [
     'cogs.staff_utils',
     'cogs.afk',
     'cogs.mcpay',
+    'cogs.tickets',
 ]
 
 class Bot(commands.Bot):

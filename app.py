@@ -940,5 +940,184 @@ def mc_full_logout():
     except Exception as e:
         return jsonify({"ok": False, "error": str(e)}), 503
 
+# ── ADD THESE ROUTES TO app.py ────────────────────────────────────────────────
+# Paste before the `if __name__ == "__main__":` line
+# These handle the ticket type + panel builder at /dashboard/<guild_id>/tickets
+
+from bson import ObjectId as _ObjId
+
+
+@app.route("/dashboard/<int:guild_id>/tickets", methods=["GET", "POST"])
+def tickets_dashboard(guild_id):
+    if "access_token" not in session:
+        return redirect("/")
+    user_guild_ids = [int(g["id"]) for g in session.get("guilds", [])]
+    if guild_id not in user_guild_ids:
+        abort(403)
+    if db is None:
+        return "<h1>Database unavailable</h1>", 500
+
+    bot_headers  = {"Authorization": f"Bot {BOT_TOKEN}", "User-Agent": "DashboardBot/1.0"}
+    roles_res    = requests.get(f"https://discord.com/api/v10/guilds/{guild_id}/roles", headers=bot_headers)
+    roles        = [r for r in (roles_res.json() if roles_res.ok else []) if r["name"] != "@everyone" and not r["managed"]]
+    chans_res    = requests.get(f"https://discord.com/api/v10/guilds/{guild_id}/channels", headers=bot_headers)
+    text_channels = [c for c in (chans_res.json() if chans_res.ok else []) if c["type"] == 0]
+
+    if request.method == "POST":
+        form_type = request.form.get("form_type")
+
+        # ── Create / update ticket type ───────────────────────────────────
+        if form_type == "save_ticket_type":
+            type_id  = request.form.get("type_id", "").strip()
+            name     = request.form.get("name", "").strip()
+            emoji    = request.form.get("emoji", "🎫").strip()
+            color_hex = request.form.get("color", "#5865f2").lstrip("#")
+            category = request.form.get("category", "").strip() or name
+            ping_role = request.form.get("ping_role", "").strip()
+            allow_roles = [r for r in request.form.getlist("allow_roles") if r]
+            button_style = request.form.get("button_style", "primary")
+            questions = [q.strip() for q in [
+                request.form.get(f"q{i}", "") for i in range(5)
+            ] if q.strip()]
+
+            if not name or not questions:
+                return redirect(f"/dashboard/{guild_id}/tickets")
+
+            try:
+                color = int(color_hex, 16)
+            except ValueError:
+                color = 0x5865F2
+
+            doc = {
+                "guild_id":     guild_id,
+                "name":         name,
+                "emoji":        emoji,
+                "color":        color,
+                "category":     category,
+                "ping_role":    ping_role,
+                "allow_roles":  allow_roles,
+                "button_style": button_style,
+                "questions":    questions[:5],
+            }
+
+            if type_id:
+                db["ticket_types"].update_one({"_id": _ObjId(type_id)}, {"$set": doc})
+            else:
+                db["ticket_types"].insert_one(doc)
+
+        # ── Delete ticket type ────────────────────────────────────────────
+        elif form_type == "delete_ticket_type":
+            type_id = request.form.get("type_id", "").strip()
+            if type_id:
+                db["ticket_types"].delete_one({"_id": _ObjId(type_id)})
+
+        # ── Create / update panel ─────────────────────────────────────────
+        elif form_type == "save_panel":
+            panel_id     = request.form.get("panel_id", "").strip()
+            panel_name   = request.form.get("panel_name", "").strip()
+            panel_title  = request.form.get("panel_title", "🎫 Open a Ticket").strip()
+            panel_desc   = request.form.get("panel_desc", "Click a button below to open a ticket.").strip()
+            panel_color_hex = request.form.get("panel_color", "#5865f2").lstrip("#")
+            type_ids     = request.form.getlist("panel_type_ids")
+
+            try:
+                panel_color = int(panel_color_hex, 16)
+            except ValueError:
+                panel_color = 0x5865F2
+
+            if not panel_name:
+                return redirect(f"/dashboard/{guild_id}/tickets")
+
+            pdoc = {
+                "guild_id":        guild_id,
+                "name":            panel_name,
+                "title":           panel_title,
+                "description":     panel_desc,
+                "color":           panel_color,
+                "ticket_type_ids": type_ids,
+            }
+
+            if panel_id:
+                db["ticket_panels"].update_one({"_id": _ObjId(panel_id)}, {"$set": pdoc})
+            else:
+                db["ticket_panels"].insert_one(pdoc)
+
+        # ── Delete panel ──────────────────────────────────────────────────
+        elif form_type == "delete_panel":
+            panel_id = request.form.get("panel_id", "").strip()
+            if panel_id:
+                db["ticket_panels"].delete_one({"_id": _ObjId(panel_id)})
+
+        # ── Post panel to a channel ───────────────────────────────────────
+        elif form_type == "post_panel":
+            panel_id   = request.form.get("panel_id", "").strip()
+            channel_id = request.form.get("channel_id", "").strip()
+
+            panel = db["ticket_panels"].find_one({"_id": _ObjId(panel_id)}) if panel_id else None
+            if panel and channel_id:
+                type_ids = panel.get("ticket_type_ids", [])
+                types    = list(db["ticket_types"].find({"_id": {"$in": [_ObjId(t) for t in type_ids]}}))
+
+                # Build components (buttons)
+                components = []
+                row_items  = []
+                for i, tt in enumerate(types[:5]):
+                    style_map = {"primary": 1, "secondary": 2, "success": 3, "danger": 4}
+                    style_val = style_map.get(tt.get("button_style", "primary"), 1)
+                    label     = f"{tt.get('emoji','🎫')} {tt['name']}"[:80]
+                    row_items.append({
+                        "type":      2,
+                        "label":     label,
+                        "style":     style_val,
+                        "custom_id": f"dyn_ticket_{str(panel['_id'])}_{str(tt['_id'])}",
+                    })
+
+                if row_items:
+                    components.append({"type": 1, "components": row_items})
+
+                color_int = panel.get("color", 0x5865F2)
+                embed_payload = {
+                    "title":       panel.get("title", "🎫 Open a Ticket"),
+                    "description": panel.get("description", "Click a button below to open a ticket."),
+                    "color":       color_int,
+                }
+
+                requests.post(
+                    f"https://discord.com/api/v10/channels/{channel_id}/messages",
+                    headers={**bot_headers, "Content-Type": "application/json"},
+                    json={"embeds": [embed_payload], "components": components},
+                )
+
+        return redirect(f"/dashboard/{guild_id}/tickets")
+
+    # GET
+    ticket_types = list(db["ticket_types"].find({"guild_id": guild_id}))
+    panels       = list(db["ticket_panels"].find({"guild_id": guild_id}))
+
+    # Convert ObjectIds to strings for the template
+    for t in ticket_types:
+        t["_id"] = str(t["_id"])
+        t["color_hex"] = f"#{t.get('color', 0x5865F2):06x}"
+    for p in panels:
+        p["_id"]   = str(p["_id"])
+        p["color_hex"] = f"#{p.get('color', 0x5865F2):06x}"
+        # Attach type names for display
+        assigned_ids = p.get("ticket_type_ids", [])
+        p["assigned_types"] = [
+            t for t in ticket_types if t["_id"] in assigned_ids
+        ]
+
+    guild_name = next((g["name"] for g in session.get("guilds", []) if int(g["id"]) == guild_id), "Server")
+
+    return render_template(
+        "tickets_dashboard.html",
+        guild_id=guild_id,
+        guild_name=guild_name,
+        roles=roles,
+        channels=text_channels,
+        ticket_types=ticket_types,
+        panels=panels,
+    )
+
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.getenv("PORT", 5000)), debug=True)
