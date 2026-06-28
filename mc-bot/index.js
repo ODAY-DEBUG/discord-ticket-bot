@@ -1,10 +1,9 @@
 // mc-bot/index.js
-// Mineflayer HTTP service — Microsoft device-code auth, token in MongoDB
-// Runs as a child process spawned by bot.py on startup
-
-const mineflayer    = require('mineflayer')
-const express       = require('express')
+const mineflayer      = require('mineflayer')
+const express         = require('express')
 const { MongoClient } = require('mongodb')
+const fs              = require('fs')
+const path            = require('path')
 
 const app = express()
 app.use(express.json())
@@ -19,66 +18,126 @@ async function connectMongo() {
   console.log('[MC-BOT] ✅ Connected to MongoDB')
 }
 
-async function saveToken(token) {
+async function saveSession(data) {
   await db.collection('mc_auth').updateOne(
-    { _id: 'ms_token' },
-    { $set: { token, updated_at: new Date() } },
+    { _id: 'ms_session' },
+    { $set: { data, updated_at: new Date() } },
     { upsert: true }
   )
+  console.log('[MC-BOT] 💾 Session saved to MongoDB')
 }
 
-async function loadToken() {
-  const doc = await db.collection('mc_auth').findOne({ _id: 'ms_token' })
-  return doc?.token ?? null
+async function loadSession() {
+  const doc = await db.collection('mc_auth').findOne({ _id: 'ms_session' })
+  return doc?.data ?? null
 }
 
-async function clearToken() {
-  await db.collection('mc_auth').deleteOne({ _id: 'ms_token' })
+async function clearSession() {
+  await db.collection('mc_auth').deleteOne({ _id: 'ms_session' })
+  console.log('[MC-BOT] 🗑️  Session cleared')
+}
+
+// ── Profiles folder (mineflayer caches MS tokens here as JSON files) ──────────
+const PROFILES_DIR = path.join(__dirname, '.mc_profiles')
+if (!fs.existsSync(PROFILES_DIR)) fs.mkdirSync(PROFILES_DIR)
+
+// Save mineflayer's profiles folder contents to MongoDB after login
+async function backupProfiles() {
+  try {
+    const files = {}
+    for (const f of fs.readdirSync(PROFILES_DIR)) {
+      files[f] = fs.readFileSync(path.join(PROFILES_DIR, f), 'utf8')
+    }
+    if (Object.keys(files).length > 0) {
+      await db.collection('mc_auth').updateOne(
+        { _id: 'ms_profiles' },
+        { $set: { files, updated_at: new Date() } },
+        { upsert: true }
+      )
+      console.log('[MC-BOT] 💾 MS profiles backed up to MongoDB')
+    }
+  } catch (e) {
+    console.error('[MC-BOT] Failed to backup profiles:', e.message)
+  }
+}
+
+// Restore profiles from MongoDB to disk before connecting
+async function restoreProfiles() {
+  try {
+    const doc = await db.collection('mc_auth').findOne({ _id: 'ms_profiles' })
+    if (!doc?.files) return false
+    for (const [name, content] of Object.entries(doc.files)) {
+      fs.writeFileSync(path.join(PROFILES_DIR, name), content, 'utf8')
+    }
+    console.log('[MC-BOT] ✅ MS profiles restored from MongoDB')
+    return true
+  } catch (e) {
+    console.error('[MC-BOT] Failed to restore profiles:', e.message)
+    return false
+  }
+}
+
+async function clearProfiles() {
+  try {
+    for (const f of fs.readdirSync(PROFILES_DIR)) {
+      fs.unlinkSync(path.join(PROFILES_DIR, f))
+    }
+    await db.collection('mc_auth').deleteOne({ _id: 'ms_profiles' })
+  } catch (e) {
+    console.error('[MC-BOT] Failed to clear profiles:', e.message)
+  }
 }
 
 // ── State ─────────────────────────────────────────────────────────────────────
 let bot              = null
 let botReady         = false
-let manualDisconnect = false  // true after /logout — suppresses auto-reconnect
+let manualDisconnect = false
 
 // status: disconnected | awaiting_auth | awaiting_discord_auth | connecting | ready | error
 let state = { status: 'disconnected', code: null, url: null, error: null }
 
 function setState(patch) {
   state = { ...state, ...patch }
-  console.log(`[MC-BOT] status → ${state.status}`)
+  console.log(`[MC-BOT] status → ${state.status}${state.code ? ` code=${state.code}` : ''}`)
 }
 
 // ── Bot ───────────────────────────────────────────────────────────────────────
 let reconnectTimer = null
 
-function scheduleReconnect(ms = 5000) {
+function scheduleReconnect(ms = 15000) {
   if (reconnectTimer) return
   reconnectTimer = setTimeout(async () => {
     reconnectTimer = null
-    const token = await loadToken()
-    startBot(token)
+    const hasProfiles = await restoreProfiles()
+    startBot(hasProfiles)
   }, ms)
 }
 
-function startBot(cachedToken = null) {
-  if (bot) { try { bot.end() } catch(_) {} }
+function startBot(hasProfiles = false) {
+  if (bot) { try { bot.end() } catch (_) {} }
   bot      = null
   botReady = false
   setState({ status: 'connecting', code: null, url: null, error: null })
 
   const opts = {
-    host:    process.env.MC_SERVER_HOST || 'play.donutsmp.net',
-    version: process.env.MC_VERSION     || '1.21',
-    auth:    'microsoft',
+    host:           process.env.MC_SERVER_HOST || 'play.donutsmp.net',
+    version:        process.env.MC_VERSION     || '1.21',
+    auth:           'microsoft',
+    profilesFolder: PROFILES_DIR,  // mineflayer reads/writes cached MS tokens here
   }
 
-  if (cachedToken) {
-    opts.session = cachedToken
-  } else {
+  // If no cached profiles, trigger device-code flow
+  if (!hasProfiles) {
     opts.onMsaCode = ({ user_code, verification_uri }) => {
-      console.log(`[MC-BOT] Device code: ${user_code}  →  ${verification_uri}`)
-      setState({ status: 'awaiting_auth', code: user_code, url: verification_uri, error: null })
+      console.log(`[MC-BOT] 🔑 Device code: ${user_code}`)
+      console.log(`[MC-BOT] 🔗 URL: ${verification_uri}`)
+      // Force state update — this is what the dashboard polls
+      setState({
+        status: 'awaiting_auth',
+        code:   user_code,
+        url:    verification_uri,
+        error:  null,
+      })
     }
   }
 
@@ -87,27 +146,20 @@ function startBot(cachedToken = null) {
   bot.on('spawn', async () => {
     botReady = true
     setState({ status: 'ready', code: null, url: null, error: null })
-    // Persist token so next restart skips device-code
-    if (bot._client?.session) {
-      await saveToken(bot._client.session)
-      console.log('[MC-BOT] 💾 Session token saved')
-    }
+    // Backup the profiles folder to MongoDB so they survive restarts
+    await backupProfiles()
   })
 
   bot.on('kicked', (reason) => {
     const msg = typeof reason === 'object' ? JSON.stringify(reason) : String(reason)
     console.log(`[MC-BOT] Kicked: ${msg}`)
     botReady = false
-
-    // Donut SMP sends a kick when it's waiting for Discord auth
     const isAuthKick = msg.toLowerCase().includes('discord') ||
-                       msg.toLowerCase().includes('verify') ||
+                       msg.toLowerCase().includes('verify')  ||
                        msg.toLowerCase().includes('authoriz')
-
     if (isAuthKick) {
       setState({ status: 'awaiting_discord_auth', code: null, url: null, error: null })
     }
-    // Don't auto-reconnect — wait for the "I Authorized" button
   })
 
   bot.on('error', (err) => {
@@ -120,13 +172,12 @@ function startBot(cachedToken = null) {
     console.log(`[MC-BOT] Disconnected: ${reason}`)
     botReady = false
     if (manualDisconnect) {
-      console.log('[MC-BOT] Manual disconnect — not reconnecting')
       setState({ status: 'disconnected', code: null, url: null, error: null })
       return
     }
     if (state.status !== 'awaiting_discord_auth') {
       setState({ status: 'disconnected', code: null, url: null, error: null })
-      scheduleReconnect(15_000)
+      scheduleReconnect(15000)
     }
   })
 }
@@ -135,52 +186,55 @@ function startBot(cachedToken = null) {
 
 app.get('/status', (_req, res) => res.json(state))
 
-// Start fresh login (device-code flow)
+// Fresh login — clears everything and starts device-code flow
 app.post('/start-login', async (_req, res) => {
   if (botReady) return res.json({ ok: true, message: 'Already connected' })
   manualDisconnect = false
-  await clearToken()
-  startBot(null)
+  await clearProfiles()
+  startBot(false)
+  // Give mineflayer ~2s to trigger onMsaCode, then respond
+  // so the frontend can start polling immediately
+  setTimeout(() => {}, 100)
   res.json({ ok: true })
 })
 
-// Called after user clicks "I Authorized" on the dashboard
-app.post('/reconnect', (_req, res) => {
+// "I Authorized" button — reconnect using saved profiles
+app.post('/reconnect', async (_req, res) => {
   console.log('[MC-BOT] Manual reconnect triggered')
   if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null }
+  manualDisconnect = false
   setState({ status: 'connecting', code: null, url: null, error: null })
-  // Small delay so Donut SMP registers the auth before we reconnect
   setTimeout(async () => {
-    const token = await loadToken()
-    startBot(token)
+    const hasProfiles = await restoreProfiles()
+    startBot(hasProfiles)
   }, 2000)
   res.json({ ok: true })
 })
 
-// Leave server — disconnect but keep token saved
+// Leave server — keep profiles/token saved
 app.post('/logout', async (_req, res) => {
   if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null }
   manualDisconnect = true
-  try { bot?.end() } catch(_) {}
+  try { bot?.end() } catch (_) {}
   bot      = null
   botReady = false
   setState({ status: 'disconnected', code: null, url: null, error: null })
   res.json({ ok: true })
 })
 
-// Full logout — disconnect AND clear token
+// Full sign out — clear everything
 app.post('/full-logout', async (_req, res) => {
   if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null }
   manualDisconnect = true
-  await clearToken()
-  try { bot?.end() } catch(_) {}
+  await clearProfiles()
+  try { bot?.end() } catch (_) {}
   bot      = null
   botReady = false
   setState({ status: 'disconnected', code: null, url: null, error: null })
   res.json({ ok: true })
 })
 
-// Run an in-game command (called by Python bot)
+// Run in-game command
 app.post('/run-command', (req, res) => {
   const { command } = req.body
   if (!command || typeof command !== 'string')
@@ -203,12 +257,13 @@ connectMongo().then(async () => {
   app.listen(PORT, '127.0.0.1', () =>
     console.log(`[MC-BOT] 🌐 Listening on 127.0.0.1:${PORT}`)
   )
-  const token = await loadToken()
-  if (token) {
-    console.log('[MC-BOT] 🔄 Found saved token, connecting...')
-    startBot(token)
+  const hasProfiles = await restoreProfiles()
+  if (hasProfiles) {
+    console.log('[MC-BOT] 🔄 Restored session — connecting...')
+    startBot(true)
   } else {
-    console.log('[MC-BOT] ℹ️  No saved token — use the dashboard to log in.')
+    console.log('[MC-BOT] ℹ️  No saved session — use the dashboard to log in.')
+    setState({ status: 'disconnected', code: null, url: null, error: null })
   }
 }).catch(err => {
   console.error('[MC-BOT] ❌ MongoDB connection failed:', err)
