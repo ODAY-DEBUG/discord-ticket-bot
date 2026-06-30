@@ -277,14 +277,17 @@ connectMongo().then(async () => {
   app.listen(PORT, '127.0.0.1', () =>
     console.log(`[MC-BOT] 🌐 Listening on 127.0.0.1:${PORT}`)
   )
+  // On boot, only restore the cached MS token from MongoDB to disk —
+  // do NOT auto-connect to the server. Joining is a manual action now
+  // (dashboard "Connect" button / /mc-start-login), so a process
+  // restart doesn't silently put the bot back on the server.
   const hasProfiles = await restoreProfiles()
   if (hasProfiles) {
-    console.log('[MC-BOT] 🔄 Restored session — connecting...')
-    startBot(true)
+    console.log('[MC-BOT] 🔄 Session restored — staying disconnected until manually connected.')
   } else {
     console.log('[MC-BOT] ℹ️  No saved session — use the dashboard to log in.')
-    setState({ status: 'disconnected', code: null, url: null, error: null })
   }
+  setState({ status: 'disconnected', code: null, url: null, error: null })
 }).catch(err => {
   console.error('[MC-BOT] ❌ MongoDB connection failed:', err)
   process.exit(1)
