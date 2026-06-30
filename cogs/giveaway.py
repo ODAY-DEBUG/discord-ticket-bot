@@ -6,6 +6,8 @@ from datetime import datetime, timedelta, timezone
 import random
 from typing import Optional, List
 from cogs.config import admin_only, is_admin_user, is_staff_user, get_guild_config, TICKET_PREFIXES
+from cogs.tickets import TicketView
+
 
 # ---------------------------------------------------------------------------
 # Helper
@@ -372,7 +374,7 @@ class WinnerClaimView(discord.ui.View):
         if guild.icon:
             embed.set_thumbnail(url=guild.icon.url)
 
-        from cogs.tickets_base import TicketView
+        
         view = TicketView()
         await ticket.send(embed=embed, view=view)
 
