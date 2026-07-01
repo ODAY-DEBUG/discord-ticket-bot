@@ -88,11 +88,37 @@ async function clearProfiles() {
   }
 }
 
+// ── Facing direction (yaw/pitch) ───────────────────────────────────────────────
+// Minecraft is supposed to remember where you were last facing, but on a bot
+// rejoin that can get reset. We track it ourselves and force it back on spawn.
+async function saveLook(yaw, pitch) {
+  try {
+    await db.collection('mc_auth').updateOne(
+      { _id: 'mc_look' },
+      { $set: { yaw, pitch, updated_at: new Date() } },
+      { upsert: true }
+    )
+  } catch (e) {
+    console.error('[MC-BOT] Failed to save look:', e.message)
+  }
+}
+
+async function loadLook() {
+  try {
+    const doc = await db.collection('mc_auth').findOne({ _id: 'mc_look' })
+    return doc ? { yaw: doc.yaw, pitch: doc.pitch } : null
+  } catch (e) {
+    console.error('[MC-BOT] Failed to load look:', e.message)
+    return null
+  }
+}
+
 // ── State ─────────────────────────────────────────────────────────────────────
 let bot              = null
 let botReady         = false
 let manualDisconnect = false
 let afkMode          = false   // when true, hold right-click 2s after spawn — nothing else
+let lookSaveInterval = null    // periodically persists current yaw/pitch while connected
 
 // status: disconnected | awaiting_auth | awaiting_discord_auth | connecting | ready | error
 let state = { status: 'disconnected', code: null, url: null, error: null, afk: false }
@@ -160,6 +186,25 @@ function startBot(hasProfiles = false) {
     // Backup the profiles folder to MongoDB so they survive restarts
     await backupProfiles()
 
+    // Force-restore the facing direction from before we last disconnected —
+    // the server can reset rotation on rejoin otherwise.
+    try {
+      const saved = await loadLook()
+      if (saved && bot) {
+        bot.look(saved.yaw, saved.pitch, true)
+        console.log('[MC-BOT] 🧭 Restored facing direction')
+      }
+    } catch (e) {
+      console.error('[MC-BOT] Failed to restore look:', e.message)
+    }
+
+    // Keep persisting current facing direction while connected, so the next
+    // reconnect (restart, AFK, etc.) knows where to face.
+    if (lookSaveInterval) clearInterval(lookSaveInterval)
+    lookSaveInterval = setInterval(() => {
+      if (bot && bot.entity) saveLook(bot.entity.yaw, bot.entity.pitch)
+    }, 5000)
+
     if (afkMode) {
       setTimeout(() => {
         if (!bot || !botReady) return
@@ -194,6 +239,7 @@ function startBot(hasProfiles = false) {
   bot.on('end', (reason) => {
     console.log(`[MC-BOT] Disconnected: ${reason}`)
     botReady = false
+    if (lookSaveInterval) { clearInterval(lookSaveInterval); lookSaveInterval = null }
     if (manualDisconnect) {
       // User explicitly left — stay disconnected, don't auto-reconnect
       setState({ status: 'disconnected', code: null, url: null, error: null })
@@ -264,8 +310,9 @@ app.post('/logout', async (_req, res) => {
   if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null }
   manualDisconnect = true
   afkMode = false
-  // Backup profiles to MongoDB before ending so they survive
+  // Backup profiles + current facing direction to MongoDB before ending so they survive
   await backupProfiles()
+  if (bot?.entity) await saveLook(bot.entity.yaw, bot.entity.pitch)
   try { bot?.end() } catch (_) {}
   bot      = null
   botReady = false
