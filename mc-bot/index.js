@@ -353,6 +353,37 @@ app.post('/full-logout', async (_req, res) => {
   res.json({ ok: true })
 })
 
+// Manual directional look — nudges yaw/pitch by a fixed step and persists it
+const LOOK_STEP = Math.PI / 8 // 22.5° per click
+
+app.post('/look', (req, res) => {
+  const { direction } = req.body || {}
+  if (!botReady || !bot || !bot.entity)
+    return res.status(503).json({ ok: false, error: 'MC bot not ready' })
+
+  let yaw   = bot.entity.yaw
+  let pitch = bot.entity.pitch
+
+  switch (direction) {
+    case 'left':  yaw   += LOOK_STEP; break
+    case 'right': yaw   -= LOOK_STEP; break
+    case 'up':    pitch = Math.max(pitch - LOOK_STEP, -Math.PI / 2); break
+    case 'down':  pitch = Math.min(pitch + LOOK_STEP,  Math.PI / 2); break
+    default:
+      return res.status(400).json({ ok: false, error: 'Invalid direction. Use left, right, up, or down.' })
+  }
+
+  try {
+    bot.look(yaw, pitch, true)
+    // Persist immediately so a reconnect keeps the direction the user just set
+    saveLook(yaw, pitch)
+    console.log(`[MC-BOT] 🧭 Manual look: ${direction} → yaw=${yaw.toFixed(2)}, pitch=${pitch.toFixed(2)}`)
+    res.json({ ok: true, yaw, pitch })
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err.message })
+  }
+})
+
 // Run in-game command
 app.post('/run-command', (req, res) => {
   const { command } = req.body

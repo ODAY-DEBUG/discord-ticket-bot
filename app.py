@@ -957,6 +957,19 @@ def mc_full_logout():
     except Exception as e:
         return jsonify({"ok": False, "error": str(e)}), 503
 
+
+@app.route("/mc-look", methods=["POST"])
+def mc_look():
+    # Nudge the bot's facing direction — { "direction": "left" | "right" | "up" | "down" }
+    if "access_token" not in session:
+        return jsonify({"error": "Unauthorized"}), 401
+    try:
+        payload = request.get_json(silent=True) or {}
+        r = requests.post(f"{MC_BOT_URL}/look", json=payload, timeout=10)
+        return jsonify(r.json())
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 503
+
 # ── ADD THESE ROUTES TO app.py ────────────────────────────────────────────────
 # Paste before the `if __name__ == "__main__":` line
 # These handle the ticket type + panel builder at /dashboard/<guild_id>/tickets
