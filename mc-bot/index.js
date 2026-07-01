@@ -222,13 +222,15 @@ function startBot(hasProfiles = false) {
         try {
           const yaw = bot.entity.yaw
           bot.look(yaw, -Math.PI / 2, true)  // pitch straight up, keep current yaw
-          console.log(`[MC-BOT] 🧭 AFK: looking up (yaw=${yaw.toFixed(2)}, pitch=${(-Math.PI / 2).toFixed(2)})`)
+          console.log(`[MC-BOT] 🧭 AFK: looking up (yaw=${yaw.toFixed(2)}, target pitch=${(-Math.PI / 2).toFixed(2)}, actual pitch after=${bot.entity.pitch.toFixed(2)})`)
         } catch (e) {
           console.error('[MC-BOT] AFK look-up failed:', e.message)
         }
         try {
+          const held = bot.heldItem
+          console.log(`[MC-BOT] 🖐️ Held item (main hand): ${held ? `${held.name} x${held.count}` : 'EMPTY — right-click will do nothing visible'}`)
           bot.activateItem()  // press-and-hold right-click on whatever is in hand
-          console.log('[MC-BOT] 🌾 AFK mode: holding right-click')
+          console.log('[MC-BOT] 🌾 AFK mode: activateItem() called — holding right-click')
         } catch (e) {
           console.error('[MC-BOT] AFK activateItem failed:', e.message)
         }
