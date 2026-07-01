@@ -200,14 +200,32 @@ function startBot(hasProfiles = false) {
 
     // Keep persisting current facing direction while connected, so the next
     // reconnect (restart, AFK, etc.) knows where to face.
+    // (Skipped while afkMode is looking up — we don't want "looking straight
+    // up" saved as the direction to restore next time.)
     if (lookSaveInterval) clearInterval(lookSaveInterval)
     lookSaveInterval = setInterval(() => {
-      if (bot && bot.entity) saveLook(bot.entity.yaw, bot.entity.pitch)
+      if (bot && bot.entity && !afkMode) saveLook(bot.entity.yaw, bot.entity.pitch)
     }, 5000)
 
     if (afkMode) {
+      console.log(`[MC-BOT] 🌾 AFK mode armed — will look up + hold right-click in 2s (bot=${!!bot}, botReady=${botReady})`)
       setTimeout(() => {
-        if (!bot || !botReady) return
+        console.log(`[MC-BOT] 🌾 AFK timer fired (bot=${!!bot}, botReady=${botReady}, afkMode=${afkMode})`)
+        if (!bot || !botReady) {
+          console.log('[MC-BOT] 🌾 AFK aborted — bot missing or not ready')
+          return
+        }
+        if (!afkMode) {
+          console.log('[MC-BOT] 🌾 AFK aborted — afkMode was turned off before timer fired')
+          return
+        }
+        try {
+          const yaw = bot.entity.yaw
+          bot.look(yaw, -Math.PI / 2, true)  // pitch straight up, keep current yaw
+          console.log(`[MC-BOT] 🧭 AFK: looking up (yaw=${yaw.toFixed(2)}, pitch=${(-Math.PI / 2).toFixed(2)})`)
+        } catch (e) {
+          console.error('[MC-BOT] AFK look-up failed:', e.message)
+        }
         try {
           bot.activateItem()  // press-and-hold right-click on whatever is in hand
           console.log('[MC-BOT] 🌾 AFK mode: holding right-click')
