@@ -356,34 +356,40 @@ app.post('/full-logout', async (_req, res) => {
 // Manual directional look — nudges yaw/pitch by a fixed step and persists it
 const LOOK_STEP = Math.PI / 8 // 22.5° per click
 
-app.post('/look', (req, res) => {
+app.post('/look', async (req, res) => {
   const { direction } = req.body || {}
   if (!botReady || !bot || !bot.entity)
     return res.status(503).json({ ok: false, error: 'MC bot not ready' })
 
-  let yaw   = bot.entity.yaw
-  let pitch = bot.entity.pitch
+  const startYaw   = bot.entity.yaw
+  const startPitch = bot.entity.pitch
+  let targetYaw   = startYaw
+  let targetPitch = startPitch
 
   switch (direction) {
-    case 'left':  yaw   += LOOK_STEP; break
-    case 'right': yaw   -= LOOK_STEP; break
-    case 'up':    pitch = Math.max(pitch - LOOK_STEP, -Math.PI / 2); break
-    case 'down':  pitch = Math.min(pitch + LOOK_STEP,  Math.PI / 2); break
+    case 'left':  targetYaw   += LOOK_STEP; break
+    case 'right': targetYaw   -= LOOK_STEP; break
+    case 'up':    targetPitch = Math.max(startPitch - LOOK_STEP, -Math.PI / 2); break
+    case 'down':  targetPitch = Math.min(startPitch + LOOK_STEP,  Math.PI / 2); break
     default:
-      return res.status(400).json({ ok: false, error: 'Invalid direction. Use left, right, up, or down.' })
+      return res.status(400).json({ ok: false, error: 'Invalid direction.' })
   }
 
   try {
-    bot.look(yaw, pitch, true)
-    // Persist immediately so a reconnect keeps the direction the user just set
-    saveLook(yaw, pitch)
-    console.log(`[MC-BOT] 🧭 Manual look: ${direction} → yaw=${yaw.toFixed(2)}, pitch=${pitch.toFixed(2)}`)
-    res.json({ ok: true, yaw, pitch })
+    const STEPS = 8
+    for (let i = 1; i <= STEPS; i++) {
+      const yaw   = startYaw   + (targetYaw   - startYaw)   * (i / STEPS)
+      const pitch = startPitch + (targetPitch - startPitch) * (i / STEPS)
+      bot.look(yaw, pitch, true)
+      await new Promise(r => setTimeout(r, 25)) // ~200ms total per click
+    }
+    saveLook(bot.entity.yaw, bot.entity.pitch)
+    console.log(`[MC-BOT] 🧭 Manual look: ${direction} → yaw=${bot.entity.yaw.toFixed(2)}, pitch=${bot.entity.pitch.toFixed(2)}`)
+    res.json({ ok: true, yaw: bot.entity.yaw, pitch: bot.entity.pitch })
   } catch (err) {
     res.status(500).json({ ok: false, error: err.message })
   }
 })
-
 // Run in-game command
 app.post('/run-command', (req, res) => {
   const { command } = req.body
