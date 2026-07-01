@@ -92,9 +92,10 @@ async function clearProfiles() {
 let bot              = null
 let botReady         = false
 let manualDisconnect = false
+let afkMode          = false   // when true, hold right-click 2s after spawn — nothing else
 
 // status: disconnected | awaiting_auth | awaiting_discord_auth | connecting | ready | error
-let state = { status: 'disconnected', code: null, url: null, error: null }
+let state = { status: 'disconnected', code: null, url: null, error: null, afk: false }
 
 function setState(patch) {
   state = { ...state, ...patch }
@@ -155,9 +156,21 @@ function startBot(hasProfiles = false) {
 
   bot.on('spawn', async () => {
     botReady = true
-    setState({ status: 'ready', code: null, url: null, error: null })
+    setState({ status: 'ready', code: null, url: null, error: null, afk: afkMode })
     // Backup the profiles folder to MongoDB so they survive restarts
     await backupProfiles()
+
+    if (afkMode) {
+      setTimeout(() => {
+        if (!bot || !botReady) return
+        try {
+          bot.activateItem()  // press-and-hold right-click on whatever is in hand
+          console.log('[MC-BOT] 🌾 AFK mode: holding right-click')
+        } catch (e) {
+          console.error('[MC-BOT] AFK activateItem failed:', e.message)
+        }
+      }, 2000)
+    }
   })
 
   bot.on('kicked', (reason) => {
@@ -205,12 +218,29 @@ app.get('/status', (_req, res) => res.json(state))
 app.post("/start-login", async (_req, res) => {
   if (botReady) return res.json({ ok: true, message: "Already connected" })
   manualDisconnect = false
+  afkMode = false
   const hasProfiles = await restoreProfiles()
   if (hasProfiles) {
     console.log("[MC-BOT] 🔄 Saved session found — reconnecting silently...")
     startBot(true)
   } else {
     console.log("[MC-BOT] 🔑 No saved session — starting fresh MS login...")
+    startBot(false)
+  }
+  res.json({ ok: true })
+})
+
+// AFK Right-Click — log on, wait 2s, hold right-click, nothing else
+app.post('/start-afk', async (_req, res) => {
+  if (botReady) return res.json({ ok: true, message: 'Already connected' })
+  manualDisconnect = false
+  afkMode = true
+  const hasProfiles = await restoreProfiles()
+  if (hasProfiles) {
+    console.log('[MC-BOT] 🔄 Saved session found — reconnecting silently (AFK mode)...')
+    startBot(true)
+  } else {
+    console.log('[MC-BOT] 🔑 No saved session — starting fresh MS login (AFK mode)...')
     startBot(false)
   }
   res.json({ ok: true })
@@ -233,12 +263,13 @@ app.post('/reconnect', async (_req, res) => {
 app.post('/logout', async (_req, res) => {
   if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null }
   manualDisconnect = true
+  afkMode = false
   // Backup profiles to MongoDB before ending so they survive
   await backupProfiles()
   try { bot?.end() } catch (_) {}
   bot      = null
   botReady = false
-  setState({ status: 'disconnected', code: null, url: null, error: null })
+  setState({ status: 'disconnected', code: null, url: null, error: null, afk: false })
   res.json({ ok: true })
 })
 
@@ -246,11 +277,12 @@ app.post('/logout', async (_req, res) => {
 app.post('/full-logout', async (_req, res) => {
   if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null }
   manualDisconnect = true
+  afkMode = false
   await clearProfiles()
   try { bot?.end() } catch (_) {}
   bot      = null
   botReady = false
-  setState({ status: 'disconnected', code: null, url: null, error: null })
+  setState({ status: 'disconnected', code: null, url: null, error: null, afk: false })
   res.json({ ok: true })
 })
 

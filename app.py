@@ -911,6 +911,18 @@ def mc_start_login():
         return jsonify({"ok": False, "error": str(e)}), 503
 
 
+@app.route("/mc-start-afk", methods=["POST"])
+def mc_start_afk():
+    # Logs on, waits 2s, holds right-click — nothing else
+    if "access_token" not in session:
+        return jsonify({"error": "Unauthorized"}), 401
+    try:
+        r = requests.post(f"{MC_BOT_URL}/start-afk", timeout=10)
+        return jsonify(r.json())
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 503
+
+
 @app.route("/mc-reconnect", methods=["POST"])
 def mc_reconnect():
     if "access_token" not in session:
