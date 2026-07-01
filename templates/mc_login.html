@@ -67,52 +67,11 @@
     .btn:disabled { opacity:.4; cursor:not-allowed; }
     .btn:hover:not(:disabled) { opacity:.85; }
     .btn-login     { background:#5865f2; color:#fff; }
-    .btn-afk       { background:#2f7d3e; color:#fff; }
     .btn-authorized{ background:#7c3aed; color:#fff; }
     .btn-leave     { background:#2d3148; color:#e2e8f0; }
     .btn-signout   { background:#3b0a0a; color:#f87171; }
 
     .hint { margin-top:20px; font-size:12px; color:#4b5563; line-height:1.7; }
-
-    .look-box {
-      background:#12141e; border:1px solid #2d3148;
-      border-radius:12px; padding:20px; margin-bottom:20px;
-    }
-    .look-box p.label { color:#8b95a1; font-size:13px; margin-bottom:16px; }
-    .dpad {
-      display:grid;
-      grid-template-columns: 1fr 1fr 1fr;
-      grid-template-areas:
-        ".    up   ."
-        "left mid  right"
-        ".    down .";
-      gap:8px;
-      max-width:220px;
-      margin:0 auto;
-    }
-    .look-btn {
-      aspect-ratio: 1;
-      border:none; border-radius:10px;
-      background:#232838; color:#e2e8f0;
-      font-size:20px; cursor:pointer;
-      display:flex; align-items:center; justify-content:center;
-      transition: background .12s, transform .08s;
-      user-select:none; touch-action: manipulation;
-    }
-    .look-btn:hover:not(:disabled)   { background:#2d3350; }
-    .look-btn:active:not(:disabled)  { background:#3a4166; transform:scale(0.94); }
-    .look-btn:disabled { opacity:.35; cursor:not-allowed; }
-    .look-btn.up    { grid-area: up; }
-    .look-btn.down  { grid-area: down; }
-    .look-btn.left  { grid-area: left; }
-    .look-btn.right { grid-area: right; }
-    .look-btn.mid   { grid-area: mid; background:transparent; cursor:default; font-size:14px; color:#4b5563; }
-    .look-btn.mid:hover { background:transparent; }
-
-    @media (max-width: 380px) {
-      .dpad { max-width: 180px; }
-      .look-btn { font-size:17px; }
-    }
   </style>
 </head>
 <body>
@@ -142,24 +101,12 @@
     <button class="btn btn-authorized" onclick="iAuthorized()">✅ I Authorized</button>
   </div>
 
-  <div id="look-box" class="look-box" style="display:none">
-    <p class="label">🧭 Look Controls</p>
-    <div class="dpad">
-      <button class="look-btn up"    onclick="look('up')"    aria-label="Look up">▲</button>
-      <button class="look-btn left"  onclick="look('left')"  aria-label="Look left">◀</button>
-      <button class="look-btn mid">👁️</button>
-      <button class="look-btn right" onclick="look('right')" aria-label="Look right">▶</button>
-      <button class="look-btn down"  onclick="look('down')"  aria-label="Look down">▼</button>
-    </div>
-  </div>
-
   <button id="btn-login"   class="btn btn-login"   onclick="startLogin()">🔗 Connect</button>
-  <button id="btn-afk"     class="btn btn-afk"     onclick="startAfk()">🌾 AFK (Right-Click)</button>
   <button id="btn-leave"   class="btn btn-leave"   onclick="leaveServer()" style="display:none">Leave Server</button>
   <button id="btn-signout" class="btn btn-signout" onclick="fullLogout()"  style="display:none">Sign Out (clear token)</button>
 
   <p class="hint">
-    <strong>AFK (Right-Click)</strong> — logs on and just holds right-click after 2s. Nothing else.<br>
+    <strong>Connect</strong> — logs on and just stays connected. Nothing else.<br>
     <strong>Leave Server</strong> — disconnects but keeps your session saved, reconnects automatically.<br>
     <strong>Sign Out</strong> — fully clears the token and requires a new Microsoft login next time.
   </p>
@@ -182,10 +129,8 @@
     const codeBox    = document.getElementById('code-box')
     const discordBox = document.getElementById('discord-box')
     const btnLogin   = document.getElementById('btn-login')
-    const btnAfk     = document.getElementById('btn-afk')
     const btnLeave   = document.getElementById('btn-leave')
     const btnSignout = document.getElementById('btn-signout')
-    const lookBox    = document.getElementById('look-box')
 
     // Reset everything
     badge.className        = 'badge'
@@ -194,20 +139,15 @@
     discordBox.style.display = 'none'
     btnLogin.style.display   = 'block'
     btnLogin.disabled        = false
-    btnAfk.style.display     = 'block'
-    btnAfk.disabled          = false
     btnLeave.style.display   = 'none'
     btnSignout.style.display = 'none'
-    lookBox.style.display    = 'none'
 
     if (s.status === 'ready') {
       badge.classList.add('ready')
-      badgeTxt.textContent     = s.afk ? '● Connected — AFK Farming' : '● Connected'
+      badgeTxt.textContent     = '● Connected'
       btnLogin.style.display   = 'none'
-      btnAfk.style.display     = 'none'
       btnLeave.style.display   = 'block'
       btnSignout.style.display = 'block'
-      lookBox.style.display    = 'block'
 
     } else if (s.status === 'awaiting_auth') {
       badge.classList.add('awaiting_auth')
@@ -217,7 +157,6 @@
       document.getElementById('device-code').textContent = s.code || '------'
       document.getElementById('device-url').href = s.url || 'https://microsoft.com/devicelogin'
       btnLogin.disabled = true
-      btnAfk.disabled   = true
 
     } else if (s.status === 'awaiting_discord_auth') {
       badge.classList.add('awaiting_discord_auth')
@@ -225,14 +164,12 @@
       dot.classList.add('pulse')
       discordBox.style.display = 'block'
       btnLogin.disabled        = true
-      btnAfk.disabled          = true
 
     } else if (s.status === 'connecting') {
       badge.classList.add('connecting')
       badgeTxt.textContent = 'Connecting…'
       dot.classList.add('pulse')
       btnLogin.disabled = true
-      btnAfk.disabled   = true
 
     } else if (s.status === 'error') {
       badge.classList.add('error')
@@ -248,15 +185,7 @@
 
   async function startLogin() {
     document.getElementById('btn-login').disabled = true
-    document.getElementById('btn-afk').disabled    = true
     await fetch('/mc-start-login', { method: 'POST' })
-    setTimeout(poll, 1500)
-  }
-
-  async function startAfk() {
-    document.getElementById('btn-login').disabled = true
-    document.getElementById('btn-afk').disabled    = true
-    await fetch('/mc-start-afk', { method: 'POST' })
     setTimeout(poll, 1500)
   }
 
@@ -268,23 +197,6 @@
   async function leaveServer() {
     await fetch('/mc-logout', { method: 'POST' })
     setTimeout(poll, 500)
-  }
-
-  let lookBusy = false
-  async function look(direction) {
-    if (lookBusy) return // avoid piling up requests if a button is mashed
-    lookBusy = true
-    try {
-      await fetch('/mc-look', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ direction })
-      })
-    } catch (e) {
-      console.error('Look request failed:', e)
-    } finally {
-      lookBusy = false
-    }
   }
 
   async function fullLogout() {

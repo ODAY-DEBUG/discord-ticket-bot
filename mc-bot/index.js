@@ -117,11 +117,10 @@ async function loadLook() {
 let bot              = null
 let botReady         = false
 let manualDisconnect = false
-let afkMode          = false   // when true, hold right-click 2s after spawn — nothing else
 let lookSaveInterval = null    // periodically persists current yaw/pitch while connected
 
 // status: disconnected | awaiting_auth | awaiting_discord_auth | connecting | ready | error
-let state = { status: 'disconnected', code: null, url: null, error: null, afk: false }
+let state = { status: 'disconnected', code: null, url: null, error: null }
 
 function setState(patch) {
   state = { ...state, ...patch }
@@ -182,7 +181,7 @@ function startBot(hasProfiles = false) {
 
   bot.on('spawn', async () => {
     botReady = true
-    setState({ status: 'ready', code: null, url: null, error: null, afk: afkMode })
+    setState({ status: 'ready', code: null, url: null, error: null })
     // Backup the profiles folder to MongoDB so they survive restarts
     await backupProfiles()
 
@@ -199,43 +198,11 @@ function startBot(hasProfiles = false) {
     }
 
     // Keep persisting current facing direction while connected, so the next
-    // reconnect (restart, AFK, etc.) knows where to face.
-    // (Skipped while afkMode is looking up — we don't want "looking straight
-    // up" saved as the direction to restore next time.)
+    // reconnect (restart, etc.) knows where to face.
     if (lookSaveInterval) clearInterval(lookSaveInterval)
     lookSaveInterval = setInterval(() => {
-      if (bot && bot.entity && !afkMode) saveLook(bot.entity.yaw, bot.entity.pitch)
+      if (bot && bot.entity) saveLook(bot.entity.yaw, bot.entity.pitch)
     }, 5000)
-
-    if (afkMode) {
-      console.log(`[MC-BOT] 🌾 AFK mode armed — will look up + hold right-click in 2s (bot=${!!bot}, botReady=${botReady})`)
-      setTimeout(() => {
-        console.log(`[MC-BOT] 🌾 AFK timer fired (bot=${!!bot}, botReady=${botReady}, afkMode=${afkMode})`)
-        if (!bot || !botReady) {
-          console.log('[MC-BOT] 🌾 AFK aborted — bot missing or not ready')
-          return
-        }
-        if (!afkMode) {
-          console.log('[MC-BOT] 🌾 AFK aborted — afkMode was turned off before timer fired')
-          return
-        }
-        try {
-          const yaw = bot.entity.yaw
-          bot.look(yaw, -Math.PI / 2, true)  // pitch straight up, keep current yaw
-          console.log(`[MC-BOT] 🧭 AFK: looking up (yaw=${yaw.toFixed(2)}, target pitch=${(-Math.PI / 2).toFixed(2)}, actual pitch after=${bot.entity.pitch.toFixed(2)})`)
-        } catch (e) {
-          console.error('[MC-BOT] AFK look-up failed:', e.message)
-        }
-        try {
-          const held = bot.heldItem
-          console.log(`[MC-BOT] 🖐️ Held item (main hand): ${held ? `${held.name} x${held.count}` : 'EMPTY — right-click will do nothing visible'}`)
-          bot.activateItem()  // press-and-hold right-click on whatever is in hand
-          console.log('[MC-BOT] 🌾 AFK mode: activateItem() called — holding right-click')
-        } catch (e) {
-          console.error('[MC-BOT] AFK activateItem failed:', e.message)
-        }
-      }, 2000)
-    }
   })
 
   bot.on('kicked', (reason) => {
@@ -279,34 +246,16 @@ function startBot(hasProfiles = false) {
 
 app.get('/status', (_req, res) => res.json(state))
 
-// Fresh login — clears everything and starts device-code flow
 // Connect — reuse saved profiles if available, only do fresh MS login if none exist
 app.post("/start-login", async (_req, res) => {
   if (botReady) return res.json({ ok: true, message: "Already connected" })
   manualDisconnect = false
-  afkMode = false
   const hasProfiles = await restoreProfiles()
   if (hasProfiles) {
     console.log("[MC-BOT] 🔄 Saved session found — reconnecting silently...")
     startBot(true)
   } else {
     console.log("[MC-BOT] 🔑 No saved session — starting fresh MS login...")
-    startBot(false)
-  }
-  res.json({ ok: true })
-})
-
-// AFK Right-Click — log on, wait 2s, hold right-click, nothing else
-app.post('/start-afk', async (_req, res) => {
-  if (botReady) return res.json({ ok: true, message: 'Already connected' })
-  manualDisconnect = false
-  afkMode = true
-  const hasProfiles = await restoreProfiles()
-  if (hasProfiles) {
-    console.log('[MC-BOT] 🔄 Saved session found — reconnecting silently (AFK mode)...')
-    startBot(true)
-  } else {
-    console.log('[MC-BOT] 🔑 No saved session — starting fresh MS login (AFK mode)...')
     startBot(false)
   }
   res.json({ ok: true })
@@ -329,14 +278,13 @@ app.post('/reconnect', async (_req, res) => {
 app.post('/logout', async (_req, res) => {
   if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null }
   manualDisconnect = true
-  afkMode = false
   // Backup profiles + current facing direction to MongoDB before ending so they survive
   await backupProfiles()
   if (bot?.entity) await saveLook(bot.entity.yaw, bot.entity.pitch)
   try { bot?.end() } catch (_) {}
   bot      = null
   botReady = false
-  setState({ status: 'disconnected', code: null, url: null, error: null, afk: false })
+  setState({ status: 'disconnected', code: null, url: null, error: null })
   res.json({ ok: true })
 })
 
@@ -344,52 +292,14 @@ app.post('/logout', async (_req, res) => {
 app.post('/full-logout', async (_req, res) => {
   if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null }
   manualDisconnect = true
-  afkMode = false
   await clearProfiles()
   try { bot?.end() } catch (_) {}
   bot      = null
   botReady = false
-  setState({ status: 'disconnected', code: null, url: null, error: null, afk: false })
+  setState({ status: 'disconnected', code: null, url: null, error: null })
   res.json({ ok: true })
 })
 
-// Manual directional look — nudges yaw/pitch by a fixed step and persists it
-const LOOK_STEP = Math.PI / 8 // 22.5° per click
-
-app.post('/look', async (req, res) => {
-  const { direction } = req.body || {}
-  if (!botReady || !bot || !bot.entity)
-    return res.status(503).json({ ok: false, error: 'MC bot not ready' })
-
-  const startYaw   = bot.entity.yaw
-  const startPitch = bot.entity.pitch
-  let targetYaw   = startYaw
-  let targetPitch = startPitch
-
-  switch (direction) {
-    case 'left':  targetYaw   += LOOK_STEP; break
-    case 'right': targetYaw   -= LOOK_STEP; break
-    case 'up':    targetPitch = Math.max(startPitch - LOOK_STEP, -Math.PI / 2); break
-    case 'down':  targetPitch = Math.min(startPitch + LOOK_STEP,  Math.PI / 2); break
-    default:
-      return res.status(400).json({ ok: false, error: 'Invalid direction.' })
-  }
-
-  try {
-    const STEPS = 8
-    for (let i = 1; i <= STEPS; i++) {
-      const yaw   = startYaw   + (targetYaw   - startYaw)   * (i / STEPS)
-      const pitch = startPitch + (targetPitch - startPitch) * (i / STEPS)
-      bot.look(yaw, pitch, true)
-      await new Promise(r => setTimeout(r, 25)) // ~200ms total per click
-    }
-    saveLook(bot.entity.yaw, bot.entity.pitch)
-    console.log(`[MC-BOT] 🧭 Manual look: ${direction} → yaw=${bot.entity.yaw.toFixed(2)}, pitch=${bot.entity.pitch.toFixed(2)}`)
-    res.json({ ok: true, yaw: bot.entity.yaw, pitch: bot.entity.pitch })
-  } catch (err) {
-    res.status(500).json({ ok: false, error: err.message })
-  }
-})
 // Run in-game command
 app.post('/run-command', (req, res) => {
   const { command } = req.body
